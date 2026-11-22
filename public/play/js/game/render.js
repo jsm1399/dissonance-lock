@@ -9,9 +9,9 @@ export function layout(w, h) {
     return { w, h, s, hudH, stripH, x0: (w - s * WORLD) / 2, y0: hudH + Math.max(4, (free - s * WORLD) / 2) };
 }
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
-const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-function text(c, s, x, y, size, color, align = "left", weight = "400") {
+export const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
+export const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export function text(c, s, x, y, size, color, align = "left", weight = "400") {
     c.font = `${weight} ${size}px ${FONT}`;
     c.textAlign = align;
     c.textBaseline = "middle";

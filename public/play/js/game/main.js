@@ -6,6 +6,8 @@ import { advanceTutor, hintFor, newTutor, tutorProgress } from "./tutorial.js";
 import { readPad } from "./pad.js";
 import { draw, layout, resetRender } from "./render.js";
 import { sfx } from "./sfx.js";
+import { createObservatory } from "../lab/observatory.js";
+import { decodeWorld, encodeWorld, parseWorld } from "../lab/world.js";
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 // ---------- persistence ----------
@@ -31,6 +33,56 @@ let acc = 0;
 let anchorQueued = false;
 const fmtTime = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const starStr = (n) => "★".repeat(n) + "☆".repeat(3 - n);
+// ---------- observatory ----------
+const LAB_KEY = "dissonance-lock.lab.v1";
+const labLink = (spec) => `${location.origin}${location.pathname}#w=${encodeWorld(spec)}`;
+const obs = createObservatory({
+    onChange(spec) {
+        try {
+            localStorage.setItem(LAB_KEY, JSON.stringify(spec));
+        }
+        catch { /* storage unavailable */ }
+        try {
+            history.replaceState(null, "", `#w=${encodeWorld(spec)}`);
+        }
+        catch { /* ignore */ }
+    },
+    onExit() {
+        obs.close();
+        try {
+            history.replaceState(null, "", location.pathname + location.search);
+        }
+        catch { /* ignore */ }
+        toMenu();
+    },
+    link: labLink,
+    copy: async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    },
+});
+function openLab(spec) {
+    let w = spec;
+    if (!w) {
+        try {
+            w = parseWorld(localStorage.getItem(LAB_KEY) ?? "") ?? undefined;
+        }
+        catch {
+            w = undefined;
+        }
+    }
+    game = null;
+    tutor = null;
+    ui.hint = null;
+    obs.open(w);
+    ui.screen = "lab";
+    sfx.unlock();
+}
 let actions = [];
 function buildMenu() {
     const items = [];
@@ -44,6 +96,7 @@ function buildMenu() {
         right: save.daily.key === today && save.daily.depth > 0 ? `depth ${save.daily.depth}` : "—" }, () => startDrift(true));
     add({ key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
         right: save.driftBest > 0 ? `best ${save.driftBest}` : "—" }, () => startDrift(false));
+    add({ key: "O", title: "Observatory", blurb: "build strata · scrub time · probe causality · share by link", right: "sandbox" }, () => openLab());
     return items;
 }
 const ui = {
@@ -183,6 +236,11 @@ addEventListener("keydown", (e) => {
     if (e.repeat && k === " ")
         return;
     sfx.unlock();
+    if (ui.screen === "lab") {
+        if (obs.key(k, e.shiftKey))
+            e.preventDefault();
+        return;
+    }
     if (k === "m") {
         ui.muted = sfx.toggle();
         return;
@@ -235,11 +293,16 @@ addEventListener("keydown", (e) => {
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 addEventListener("blur", () => { keys.clear(); pointer.down = false; if (ui.screen === "play")
-    ui.screen = "pause"; });
+    ui.screen = "pause"; obs.pointerUp(); });
 canvas.addEventListener("pointerdown", (e) => {
     sfx.unlock();
     pointer.x = e.offsetX;
     pointer.y = e.offsetY;
+    if (ui.screen === "lab") {
+        obs.pointerDown(e.offsetX, e.offsetY);
+        canvas.setPointerCapture(e.pointerId);
+        return;
+    }
     if (ui.screen === "title") {
         const i = ui.hits.rows.findIndex((r) => inside(r, e.offsetX, e.offsetY));
         if (i >= 0) {
@@ -269,8 +332,13 @@ canvas.addEventListener("pointerdown", (e) => {
     pointer.down = true;
     canvas.setPointerCapture(e.pointerId);
 });
-canvas.addEventListener("pointermove", (e) => { pointer.x = e.offsetX; pointer.y = e.offsetY; });
-const up = () => { pointer.down = false; };
+canvas.addEventListener("pointermove", (e) => {
+    pointer.x = e.offsetX;
+    pointer.y = e.offsetY;
+    if (ui.screen === "lab")
+        obs.pointerMove(e.offsetX, e.offsetY);
+});
+const up = () => { pointer.down = false; obs.pointerUp(); };
 canvas.addEventListener("pointerup", up);
 canvas.addEventListener("pointercancel", up);
 /** Gamepad edge-triggered actions (movement is polled in readInput). */
@@ -407,7 +475,10 @@ function frame(now) {
         else
             ui.hint = null;
     }
-    draw(ctx, game, ui, view, now);
+    if (ui.screen === "lab")
+        obs.draw(ctx, innerWidth, innerHeight, now, dt);
+    else
+        draw(ctx, game, ui, view, now);
     requestAnimationFrame(frame);
 }
 addEventListener("resize", resize);
@@ -423,7 +494,14 @@ window.__dl = {
     }),
     game: () => game,
     save: () => save,
+    lab: () => obs.lab(),
+    openLab,
 };
+if (location.hash.startsWith("#w=")) {
+    const shared = decodeWorld(location.hash.slice(3));
+    if (shared)
+        openLab(shared);
+}
 if ("serviceWorker" in navigator)
     navigator.serviceWorker.register("./sw.js").catch(() => undefined);
 requestAnimationFrame(frame);

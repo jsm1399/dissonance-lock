@@ -68,3 +68,23 @@ export function wavefront(tree, from, tEmitLocal, tNowRoot, n, maxDist, step = 1
     }
     return out;
 }
+/**
+ * Arrival-time field of one emission over a 2D root-coordinate box (the "causal landscape").
+ * Straight-chord march per cell, so it is an upper bound on true arrival (see `march`).
+ */
+export function arrivalField(tree, from, tEmitLocal, min, max, n, opts = {}) {
+    const values = new Float64Array(n * n);
+    let tmin = Infinity, tmax = -Infinity;
+    for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+            const p = [min[0] + ((i + 0.5) * (max[0] - min[0])) / n, min[1] + ((j + 0.5) * (max[1] - min[1])) / n];
+            const t = march(tree, from, tEmitLocal, { domain: "root", pos: p }, opts).rootTime;
+            values[j * n + i] = t;
+            if (t < tmin)
+                tmin = t;
+            if (t > tmax)
+                tmax = t;
+        }
+    }
+    return { n, values, tmin, tmax };
+}

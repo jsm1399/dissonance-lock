@@ -4,7 +4,7 @@ import { wavefront } from "../core/strata/index.js";
 import type { Vec } from "../core/strata/index.js";
 
 export interface Rect { x: number; y: number; w: number; h: number }
-export type Screen = "title" | "play" | "pause" | "end";
+export type Screen = "title" | "play" | "pause" | "end" | "lab";
 
 export interface MenuItem { key: string; title: string; blurb: string; right: string }
 export interface EndInfo { title: string; good: boolean; lines: string[]; prompt: string; copy?: boolean }
@@ -37,10 +37,10 @@ export function layout(w: number, h: number): View {
 }
 
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-const hsl = (h: number, s: number, l: number, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
-const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export const hsl = (h: number, s: number, l: number, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
+export const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-function text(
+export function text(
   c: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color: string,
   align: CanvasTextAlign = "left", weight = "400",
 ): void {

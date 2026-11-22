@@ -80,3 +80,32 @@ export function wavefront(
   }
   return out;
 }
+
+export interface ArrivalField {
+  n: number;
+  /** row-major n*n arrival root-times; cell (i,j) centre = min + (i+.5, j+.5) * span / n */
+  values: Float64Array;
+  tmin: number;
+  tmax: number;
+}
+
+/**
+ * Arrival-time field of one emission over a 2D root-coordinate box (the "causal landscape").
+ * Straight-chord march per cell, so it is an upper bound on true arrival (see `march`).
+ */
+export function arrivalField(
+  tree: StrataTree, from: Site, tEmitLocal: number, min: Vec, max: Vec, n: number, opts: MarchOptions = {},
+): ArrivalField {
+  const values = new Float64Array(n * n);
+  let tmin = Infinity, tmax = -Infinity;
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const p: Vec = [min[0] + ((i + 0.5) * (max[0] - min[0])) / n, min[1] + ((j + 0.5) * (max[1] - min[1])) / n];
+      const t = march(tree, from, tEmitLocal, { domain: "root", pos: p }, opts).rootTime;
+      values[j * n + i] = t;
+      if (t < tmin) tmin = t;
+      if (t > tmax) tmax = t;
+    }
+  }
+  return { n, values, tmin, tmax };
+}
