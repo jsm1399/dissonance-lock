@@ -236,6 +236,7 @@ addEventListener("keydown", (e) => {
   if (ui.screen === "end") {
     if (k === "enter" || k === " ") advance();
     else if (k === "escape") toMenu();
+    else if (k === "o") openLab();
     else if (k === "c") copyResult();
     return;
   }
@@ -243,6 +244,7 @@ addEventListener("keydown", (e) => {
     if (k === "p") ui.screen = "play";
     else if (k === "escape") toMenu();
     else if (k === "r") restart();
+    else if (k === "o") openLab();
     return;
   }
   if (k === "p" || k === "escape") { ui.screen = "pause"; keys.clear(); return; }

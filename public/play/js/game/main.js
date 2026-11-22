@@ -263,6 +263,8 @@ addEventListener("keydown", (e) => {
             advance();
         else if (k === "escape")
             toMenu();
+        else if (k === "o")
+            openLab();
         else if (k === "c")
             copyResult();
         return;
@@ -274,6 +276,8 @@ addEventListener("keydown", (e) => {
             toMenu();
         else if (k === "r")
             restart();
+        else if (k === "o")
+            openLab();
         return;
     }
     if (k === "p" || k === "escape") {
