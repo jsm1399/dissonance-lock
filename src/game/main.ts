@@ -1,36 +1,58 @@
 import { LEVELS } from "./levels.js";
-import { newGame, step, TICK, WORLD } from "./state.js";
+import { MAX_CHARGES, newGame, stars, step, TICK, WORLD } from "./state.js";
 import type { Game, Input } from "./state.js";
+import { generateLevel } from "./gen.js";
+import { SAVE_KEY, dailyKey, dailySeed, parseSave } from "./save.js";
+import type { SaveData } from "./save.js";
 import { draw, layout, resetRender } from "./render.js";
-import type { Rect, Ui, View } from "./render.js";
+import type { MenuItem, Rect, Ui, View } from "./render.js";
 import { sfx } from "./sfx.js";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
-const STORE = "dissonance-lock.best.v1";
-function loadBest(): (number | null)[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(STORE) ?? "null") as unknown;
-    if (Array.isArray(raw)) return LEVELS.map((_, i) => (typeof raw[i] === "number" ? (raw[i] as number) : null));
-  } catch { /* storage unavailable */ }
-  return LEVELS.map(() => null);
+// ---------- persistence ----------
+function loadSave(): SaveData {
+  try { return parseSave(localStorage.getItem(SAVE_KEY), LEVELS.length); } catch { return parseSave(null, LEVELS.length); }
 }
-function saveBest(b: (number | null)[]): void {
-  try { localStorage.setItem(STORE, JSON.stringify(b)); } catch { /* ignore */ }
+function writeSave(): void {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch { /* storage unavailable */ }
+}
+let save = loadSave();
+
+// ---------- run state ----------
+interface Run { kind: "campaign" | "drift"; idx: number; depth: number; daily: boolean; seed: number; carry: number }
+let run: Run = { kind: "campaign", idx: 0, depth: 1, daily: false, seed: 0, carry: MAX_CHARGES };
+let game: Game | null = null;
+let acc = 0;
+let anchorQueued = false;
+
+const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const starStr = (n: number) => "★".repeat(n) + "☆".repeat(3 - n);
+
+function buildMenu(): MenuItem[] {
+  const items: MenuItem[] = LEVELS.map((L, i) => ({
+    key: String(i + 1), title: L.name, blurb: L.blurb,
+    right: save.best[i] === null ? "—" : `${starStr(save.stars[i])} ${fmtTime(save.best[i] as number)}`,
+  }));
+  const today = dailyKey(new Date());
+  items.push({
+    key: "D", title: "Daily Drift", blurb: `endless · same worlds for everyone · ${today}`,
+    right: save.daily.key === today && save.daily.depth > 0 ? `depth ${save.daily.depth}` : "—",
+  });
+  items.push({
+    key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
+    right: save.driftBest > 0 ? `best ${save.driftBest}` : "—",
+  });
+  return items;
 }
 
 const ui: Ui = {
-  screen: "title", levelIdx: 0, best: loadBest(), muted: false,
+  screen: "title", sel: 0, menu: buildMenu(), end: null, muted: false,
   anchorAt: -1e9, heardAt: -1e9, heardHue: 0,
-  hits: { rows: [], anchor: { x: 0, y: 0, w: 0, h: 0 } },
+  hits: { rows: [], anchor: { x: 0, y: 0, w: 0, h: 0 }, menu: { x: 0, y: 0, w: 0, h: 0 } },
 };
-let game: Game | null = null;
 let view: View = layout(innerWidth, innerHeight);
-let acc = 0;
-let anchorQueued = false;
-const keys = new Set<string>();
-const pointer = { down: false, x: 0, y: 0 };
 
 function resize(): void {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -42,21 +64,49 @@ function resize(): void {
   view = layout(innerWidth, innerHeight);
 }
 
-function start(i: number): void {
-  ui.levelIdx = Math.max(0, Math.min(LEVELS.length - 1, i));
-  game = newGame(LEVELS[ui.levelIdx]);
+function launch(): void {
+  const level = run.kind === "campaign" ? LEVELS[run.idx] : generateLevel(run.seed, run.depth);
+  game = newGame(level);
+  if (run.kind === "drift") game.charges = run.carry;
   resetRender();
   acc = 0;
   anchorQueued = false;
+  ui.end = null;
   ui.screen = "play";
   sfx.unlock();
+}
+
+function startCampaign(i: number): void {
+  run = { kind: "campaign", idx: Math.max(0, Math.min(LEVELS.length - 1, i)), depth: 1, daily: false, seed: 0, carry: MAX_CHARGES };
+  launch();
+}
+
+function startDrift(daily: boolean): void {
+  const seed = daily ? dailySeed(dailyKey(new Date())) : (Math.random() * 4294967296) >>> 0;
+  run = { kind: "drift", idx: -1, depth: 1, daily, seed, carry: MAX_CHARGES };
+  launch();
+}
+
+function startItem(i: number): void {
+  if (i < LEVELS.length) startCampaign(i);
+  else startDrift(i === LEVELS.length);
 }
 
 function toMenu(): void {
   game = null;
   resetRender();
+  ui.menu = buildMenu();
   ui.screen = "title";
 }
+
+function restart(): void {
+  if (run.kind === "drift") { run.depth = 1; run.carry = MAX_CHARGES; }
+  launch();
+}
+
+// ---------- input ----------
+const keys = new Set<string>();
+const pointer = { down: false, x: 0, y: 0 };
 
 function readInput(): Input {
   let dx = 0, dy = 0;
@@ -75,13 +125,20 @@ function readInput(): Input {
 
 const inside = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
-function endScreenKey(key: string): void {
-  if (!game) return;
-  if (key === "enter" || key === " ") {
-    if (game.phase === "won") {
-      if (ui.levelIdx < LEVELS.length - 1) start(ui.levelIdx + 1); else toMenu();
-    } else start(ui.levelIdx);
-  } else if (key === "escape") toMenu();
+function advance(): void {
+  const won = game?.phase === "won";
+  if (run.kind === "campaign") {
+    if (won && run.idx < LEVELS.length - 1) { run.idx++; launch(); }
+    else if (won) toMenu();
+    else launch();
+  } else if (won) {
+    run.depth++;
+    launch();
+  } else {
+    // drift lost: new attempt (daily replays the same seed, free rolls a new one)
+    run = { ...run, depth: 1, carry: MAX_CHARGES, seed: run.daily ? run.seed : (Math.random() * 4294967296) >>> 0 };
+    launch();
+  }
 }
 
 addEventListener("keydown", (e) => {
@@ -91,21 +148,27 @@ addEventListener("keydown", (e) => {
   sfx.unlock();
   if (k === "m") { ui.muted = sfx.toggle(); return; }
   if (ui.screen === "title") {
-    if (k === "1" || k === "2" || k === "3") start(Number(k) - 1);
-    else if (k === "enter" || k === " ") start(ui.levelIdx);
-    else if (k === "arrowup" || k === "w") ui.levelIdx = Math.max(0, ui.levelIdx - 1);
-    else if (k === "arrowdown" || k === "s") ui.levelIdx = Math.min(LEVELS.length - 1, ui.levelIdx + 1);
+    const n = ui.menu.length;
+    const hit = ui.menu.findIndex((m) => m.key.toLowerCase() === k);
+    if (hit >= 0) startItem(hit);
+    else if (k === "enter" || k === " ") startItem(ui.sel);
+    else if (k === "arrowup" || k === "w") ui.sel = (ui.sel + n - 1) % n;
+    else if (k === "arrowdown" || k === "s") ui.sel = (ui.sel + 1) % n;
     return;
   }
-  if (ui.screen === "end") { endScreenKey(k); return; }
+  if (ui.screen === "end") {
+    if (k === "enter" || k === " ") advance();
+    else if (k === "escape") toMenu();
+    return;
+  }
   if (ui.screen === "pause") {
-    if (k === "p" || k === "escape") ui.screen = "play";
-    else if (k === "r") start(ui.levelIdx);
+    if (k === "p") ui.screen = "play";
+    else if (k === "escape") toMenu();
+    else if (k === "r") restart();
     return;
   }
-  // playing
   if (k === "p" || k === "escape") { ui.screen = "pause"; keys.clear(); return; }
-  if (k === "r") { start(ui.levelIdx); return; }
+  if (k === "r") { restart(); return; }
   if (k === " ") { anchorQueued = true; return; }
   keys.add(k);
 });
@@ -117,11 +180,14 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.x = e.offsetX; pointer.y = e.offsetY;
   if (ui.screen === "title") {
     const i = ui.hits.rows.findIndex((r) => inside(r, e.offsetX, e.offsetY));
-    if (i >= 0) start(i);
+    if (i >= 0) { ui.sel = i; startItem(i); }
     return;
   }
-  if (ui.screen === "end") { endScreenKey("enter"); return; }
-  if (ui.screen === "pause") { ui.screen = "play"; return; }
+  if (ui.screen === "end") { advance(); return; }
+  if (ui.screen === "pause") {
+    if (inside(ui.hits.menu, e.offsetX, e.offsetY)) toMenu(); else ui.screen = "play";
+    return;
+  }
   if (inside(ui.hits.anchor, e.offsetX, e.offsetY)) { anchorQueued = true; return; }
   pointer.down = true;
   canvas.setPointerCapture(e.pointerId);
@@ -130,6 +196,52 @@ canvas.addEventListener("pointermove", (e) => { pointer.x = e.offsetX; pointer.y
 const up = () => { pointer.down = false; };
 canvas.addEventListener("pointerup", up);
 canvas.addEventListener("pointercancel", up);
+
+// ---------- game events ----------
+function onWon(g: Game): void {
+  const t = Math.round(g.time * 10) / 10;
+  const st = stars(g);
+  if (run.kind === "campaign") {
+    const prev = save.best[run.idx];
+    if (prev === null || t < prev) save.best[run.idx] = t;
+    save.stars[run.idx] = Math.max(save.stars[run.idx], st);
+    writeSave();
+    const last = run.idx >= LEVELS.length - 1;
+    ui.end = {
+      title: last ? "ALL LOCKS HELD" : "LOCK ACHIEVED", good: true,
+      lines: [`${g.level.name} · ${fmtTime(g.time)} · anchors used ${g.anchors}`, starStr(st)],
+      prompt: last ? "Enter · menu" : "Enter · next level",
+    };
+  } else {
+    const today = dailyKey(new Date());
+    save.driftBest = Math.max(save.driftBest, run.depth);
+    if (run.daily) save.daily = { key: today, depth: save.daily.key === today ? Math.max(save.daily.depth, run.depth) : run.depth };
+    writeSave();
+    run.carry = Math.min(MAX_CHARGES, g.charges + 1);
+    ui.end = {
+      title: `DEPTH ${run.depth} CLEARED`, good: true,
+      lines: [`${fmtTime(g.time)} · anchors used ${g.anchors}`, `charges carried: ${run.carry}`],
+      prompt: "Enter · descend",
+    };
+  }
+  ui.screen = "end";
+  sfx.win();
+}
+
+function onLost(g: Game): void {
+  if (run.kind === "drift") {
+    const cleared = run.depth - 1;
+    ui.end = {
+      title: "DRIFT ENDED", good: false,
+      lines: [`cleared ${cleared} level${cleared === 1 ? "" : "s"}`, run.daily ? "daily seed: same worlds again" : "new seed on retry"],
+      prompt: "Enter · try again",
+    };
+  } else {
+    ui.end = { title: "OVERLOAD", good: false, lines: [`${g.level.name} · ${fmtTime(g.time)}`], prompt: "Enter · retry" };
+  }
+  ui.screen = "end";
+  sfx.lose();
+}
 
 function handleEvents(g: Game): void {
   for (const ev of g.events) {
@@ -141,19 +253,12 @@ function handleEvents(g: Game): void {
     } else if (ev.kind === "anchor") {
       ui.anchorAt = performance.now();
       sfx.anchor();
-    } else if (ev.kind === "won") {
-      const t = Math.round(g.time * 10) / 10;
-      const prev = ui.best[ui.levelIdx];
-      if (prev === null || t < prev) { ui.best[ui.levelIdx] = t; saveBest(ui.best); }
-      ui.screen = "end";
-      sfx.win();
-    } else if (ev.kind === "lost") {
-      ui.screen = "end";
-      sfx.lose();
-    }
+    } else if (ev.kind === "won") onWon(g);
+    else if (ev.kind === "lost") onLost(g);
   }
 }
 
+// ---------- loop ----------
 let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -176,11 +281,14 @@ resize();
 
 // test/inspection hook
 (window as unknown as { __dl: unknown }).__dl = {
-  start,
+  startItem,
   state: () => ({
-    screen: ui.screen, level: ui.levelIdx, phase: game?.phase ?? null, time: game?.time ?? 0,
+    screen: ui.screen, run: { ...run }, phase: game?.phase ?? null, time: game?.time ?? 0,
     dissonance: game?.dissonance ?? 0, lock: game?.lock ?? 0, pos: game?.pos ?? null, world: WORLD,
+    tag: game?.level.tag ?? null, end: ui.end, charges: game?.charges ?? 0,
   }),
   game: () => game,
+  save: () => save,
 };
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => undefined);
 requestAnimationFrame(frame);

@@ -4,6 +4,7 @@ import { LEVELS } from "../src/game/levels.js";
 import type { LevelDef } from "../src/game/levels.js";
 import { StrataTree } from "../src/core/strata/index.js";
 import { newGame, step, probeSpread, TICK, WORLD, MAX_CHARGES } from "../src/game/state.js";
+import { generateLevel } from "../src/game/gen.js";
 import type { Game, Input } from "../src/game/state.js";
 
 const idle: Input = { dx: 0, dy: 0, anchor: false };
@@ -127,7 +128,7 @@ test("invariants hold under random play on every level", () => {
 });
 
 test("design: every level has a coherent zone and an overload zone (contour exists)", () => {
-  for (const L of LEVELS) {
+  for (const L of [...LEVELS, generateLevel(5, 3), generateLevel(5, 7)]) {
     const g = newGame(L);
     run(g, 30);
     const pStar = L.decay / L.gain;
@@ -146,7 +147,7 @@ test("design: every level has a coherent zone and an overload zone (contour exis
 test("design: a contour-following bot can win every level", () => {
   const dirs: [number, number][] = [[0, 0]];
   for (let i = 0; i < 8; i++) dirs.push([Math.cos((i * Math.PI) / 4), Math.sin((i * Math.PI) / 4)]);
-  for (const L of LEVELS) {
+  for (const L of [LEVELS[0], LEVELS[2], LEVELS[4], generateLevel(20261122, 3)]) {
     const g = newGame(L);
     g.pos = [50, 50];
     const pStar = L.decay / L.gain;

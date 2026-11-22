@@ -1,5 +1,4 @@
 import { WORLD, MAX_CHARGES, CHARGE_REGEN } from "./state.js";
-import { LEVELS } from "./levels.js";
 import { wavefront } from "../core/strata/index.js";
 export function layout(w, h) {
     const hudH = w < 640 ? 96 : 64;
@@ -9,6 +8,7 @@ export function layout(w, h) {
     const free = h - hudH - stripH;
     return { w, h, s, hudH, stripH, x0: (w - s * WORLD) / 2, y0: hudH + Math.max(4, (free - s * WORLD) / 2) };
 }
+const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
 const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 function text(c, s, x, y, size, color, align = "left", weight = "400") {
@@ -70,7 +70,7 @@ function drawHud(c, g, v, now) {
     const L = g.level;
     const narrow = v.w < 640;
     text(c, "DISSONANCE-LOCK", 14, 16, 12, "rgba(180,200,220,0.55)", "left", "700");
-    text(c, `L${L.id} · ${L.name}`, 14, 34, 15, "#e8f1ff", "left", "700");
+    text(c, `${L.tag} · ${L.name}`, 14, 34, 15, "#e8f1ff", "left", "700");
     text(c, fmtTime(g.time), v.w - 14, 16, 14, "#e8f1ff", "right", "700");
     // anchor pips
     const px = v.w - 14;
@@ -108,7 +108,7 @@ function drawHud(c, g, v, now) {
     const lo = bx2 + (g.level.bandLo / 100) * bw2, hi = bx2 + (g.level.bandHi / 100) * bw2;
     const inBand = g.dissonance >= L.bandLo && g.dissonance <= L.bandHi;
     c.strokeStyle = inBand ? "#fff" : "rgba(255,255,255,0.5)";
-    c.lineWidth = inBand ? 2 + 0.8 * Math.sin(now / 120) : 1.5;
+    c.lineWidth = inBand ? 2 + (REDUCED ? 0 : 0.8 * Math.sin(now / 120)) : 1.5;
     c.strokeRect(lo, dy2 + 9, hi - lo, 22);
     c.lineWidth = 1;
 }
@@ -234,7 +234,7 @@ function drawWorld(c, g, ui, v, now) {
     }
     const hue = dissHue(g.dissonance);
     const px = X(g.pos[0]), py = Y(g.pos[1]);
-    const halo = (2.6 + 0.35 * Math.sin(now / 160)) * v.s * (1 + g.pressure);
+    const halo = (2.6 + (REDUCED ? 0 : 0.35 * Math.sin(now / 160))) * v.s * (1 + g.pressure);
     c.beginPath();
     c.arc(px, py, halo, 0, Math.PI * 2);
     c.fillStyle = hsl(hue, 85, 55, 0.2);
@@ -272,7 +272,7 @@ function drawWorld(c, g, ui, v, now) {
         c.lineWidth = 1;
     }
     if (g.dissonance > 80) {
-        c.fillStyle = `rgba(255,40,80,${0.06 + 0.06 * Math.sin(now / 90)})`;
+        c.fillStyle = `rgba(255,40,80,${REDUCED ? 0.08 : 0.06 + 0.06 * Math.sin(now / 90)})`;
         c.fillRect(v.x0, v.y0, WORLD * v.s, WORLD * v.s);
     }
     c.restore();
@@ -284,56 +284,60 @@ function dim(c, v, a) {
     c.fillRect(0, 0, v.w, v.h);
 }
 function drawTitle(c, ui, v) {
-    dim(c, v, 0.88);
+    dim(c, v, 0.9);
     const cx = v.w / 2;
-    let y = Math.max(48, v.h * 0.12);
+    let y = Math.max(36, v.h * 0.07);
     text(c, "DISSONANCE-LOCK", cx, y, Math.min(40, v.w / 11), "#e8f1ff", "center", "700");
-    y += 34;
+    y += 30;
     text(c, "hold the lock between echoes", cx, y, 14, "rgba(127,219,202,0.9)", "center");
-    y += 40;
+    y += 30;
     const lines = [
         "Echoes reach you late. Every domain runs its own clock.",
         "Dissonance builds when echoes arrive out of step.",
         "Keep it inside the white band to build LOCK. Overload = defeat.",
-        "RE-ANCHOR (space) resets dissonance. 2 charges.",
-        "Move: WASD / arrows / drag.   P pause · R restart · M mute",
+        "RE-ANCHOR (space) resets dissonance. Move: WASD / arrows / drag.",
     ];
-    const fs = v.w < 520 ? 11 : 13;
+    const fs = v.w < 520 ? 11 : 12;
     for (const l of lines) {
         text(c, l, cx, y, fs, "rgba(200,215,235,0.85)", "center");
-        y += fs + 9;
+        y += fs + 7;
     }
-    y += 18;
+    y += 14;
     ui.hits.rows = [];
-    LEVELS.forEach((L, i) => {
-        const w = Math.min(460, v.w - 32), r = { x: cx - w / 2, y, w, h: 50 };
+    const n = ui.menu.length;
+    const room = v.h - y - 34;
+    const rowH = Math.max(34, Math.min(50, room / n - 6));
+    ui.menu.forEach((m, i) => {
+        const w = Math.min(500, v.w - 24), r = { x: cx - w / 2, y, w, h: rowH };
         ui.hits.rows.push(r);
-        const sel = i === ui.levelIdx;
+        const sel = i === ui.sel;
         c.fillStyle = sel ? "rgba(127,219,202,0.14)" : "rgba(255,255,255,0.04)";
         c.fillRect(r.x, r.y, r.w, r.h);
         c.strokeStyle = sel ? "#7fdbca" : "rgba(255,255,255,0.18)";
         c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-        text(c, `${i + 1}  ${L.name}`, r.x + 14, r.y + 18, 14, "#e8f1ff", "left", "700");
-        text(c, L.blurb, r.x + 14, r.y + 36, 10, "rgba(180,200,220,0.7)");
-        const b = ui.best[i];
-        text(c, b === null || b === undefined ? "—" : `best ${fmtTime(b)}`, r.x + r.w - 14, r.y + 18, 11, "#7fdbca", "right");
-        y += 58;
+        text(c, `${m.key}  ${m.title}`, r.x + 12, r.y + rowH * 0.36, 13, "#e8f1ff", "left", "700");
+        text(c, m.blurb, r.x + 12, r.y + rowH * 0.72, 10, "rgba(180,200,220,0.7)");
+        text(c, m.right, r.x + r.w - 12, r.y + rowH * 0.36, 11, "#7fdbca", "right");
+        y += rowH + 6;
     });
-    y += 10;
-    text(c, "press 1-3, Enter, or tap a level", cx, y, 11, "rgba(180,200,220,0.6)", "center");
+    text(c, "press a key, Enter, or tap · P pause · R restart · M mute", cx, v.h - 18, 11, "rgba(180,200,220,0.55)", "center");
 }
-function drawEnd(c, g, ui, v) {
-    dim(c, v, 0.78);
-    const won = g.phase === "won";
-    const cx = v.w / 2, cy = v.h / 2;
-    text(c, won ? "LOCK ACHIEVED" : "OVERLOAD", cx, cy - 56, Math.min(38, v.w / 11), won ? "#7fdbca" : "#ff4d6d", "center", "700");
-    text(c, `${g.level.name} · ${fmtTime(g.time)} · anchors used ${g.anchors}`, cx, cy - 14, 13, "#e8f1ff", "center");
-    const best = ui.best[ui.levelIdx];
-    if (won && best !== null && best !== undefined)
-        text(c, `best ${fmtTime(best)}`, cx, cy + 10, 12, "rgba(127,219,202,0.9)", "center");
-    const next = won ? (ui.levelIdx < LEVELS.length - 1 ? "Enter · next level" : "Enter · menu") : "Enter · retry";
-    text(c, next, cx, cy + 44, 14, "#e8f1ff", "center", "700");
-    text(c, "Esc · menu", cx, cy + 66, 11, "rgba(180,200,220,0.6)", "center");
+function drawEnd(c, ui, v) {
+    dim(c, v, 0.8);
+    const e = ui.end;
+    if (!e)
+        return;
+    const cx = v.w / 2;
+    let y = v.h / 2 - 20 - e.lines.length * 11;
+    text(c, e.title, cx, y, Math.min(36, v.w / 11), e.good ? "#7fdbca" : "#ff4d6d", "center", "700");
+    y += 38;
+    for (const l of e.lines) {
+        text(c, l, cx, y, 13, "#e8f1ff", "center");
+        y += 22;
+    }
+    y += 14;
+    text(c, e.prompt, cx, y, 14, "#e8f1ff", "center", "700");
+    text(c, "Esc · menu", cx, y + 24, 11, "rgba(180,200,220,0.6)", "center");
 }
 export function draw(ctx, g, ui, v, now) {
     ctx.fillStyle = "#05070b";
@@ -354,10 +358,17 @@ export function draw(ctx, g, ui, v, now) {
     }
     else if (ui.screen === "pause") {
         dim(ctx, v, 0.65);
-        text(ctx, "PAUSED", v.w / 2, v.h / 2 - 8, 30, "#e8f1ff", "center", "700");
-        text(ctx, "P · resume    R · restart    Esc · menu", v.w / 2, v.h / 2 + 28, 12, "rgba(180,200,220,0.7)", "center");
+        text(ctx, "PAUSED", v.w / 2, v.h / 2 - 30, 30, "#e8f1ff", "center", "700");
+        text(ctx, "tap / P · resume     R · restart", v.w / 2, v.h / 2 + 4, 12, "rgba(180,200,220,0.7)", "center");
+        const r = { x: v.w / 2 - 60, y: v.h / 2 + 24, w: 120, h: 36 };
+        ui.hits.menu = r;
+        ctx.fillStyle = "rgba(127,219,202,0.14)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = "#7fdbca";
+        ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+        text(ctx, "MENU (Esc)", v.w / 2, r.y + 19, 12, "#7fdbca", "center", "700");
     }
     else if (ui.screen === "end")
-        drawEnd(ctx, g, ui, v);
+        drawEnd(ctx, ui, v);
     text(ctx, ui.muted ? "muted" : "", v.w - 10, v.h - v.stripH - 8, 10, "rgba(180,200,220,0.5)", "right");
 }

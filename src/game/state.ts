@@ -157,3 +157,11 @@ export function probeSpread(g: Game, pos: Vec): number {
   }
   return lagSpread(lags);
 }
+
+/** Star rating for a finished level: faster and anchor-free is better. */
+export function stars(g: Game): 1 | 2 | 3 {
+  const minT = 100 / g.level.lockRate;
+  if (g.anchors === 0 && g.time <= minT * 1.6) return 3;
+  if (g.time <= minT * 2.4) return 2;
+  return 1;
+}
