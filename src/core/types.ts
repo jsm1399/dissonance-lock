@@ -12,7 +12,13 @@ export interface Body {
 
 export interface Rules {
   /** action name -> severity (0..1 dissonance added per violation) */
-  forbid: Record<string, number>;
+  forbid?: Record<string, number>;
+  /** extra acceleration (px/s^2) applied to bodies inside the zone; stacks across zones */
+  gravity?: Vec;
+  /** velocity damping per second inside the zone; overrides world drag (smallest zone wins) */
+  friction?: number;
+  /** spring-like pull toward the zone center (px/s^2 at the rim, 0 at center); stacks across zones */
+  attract?: number;
 }
 
 export interface ZoneDef {

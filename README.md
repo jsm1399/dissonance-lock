@@ -13,4 +13,13 @@ w.step();                             // fixed 1/60s, deterministic
 w.reanchor(p.id);                     // inside an anchor's radius
 ```
 
+**Rule fields** (per zone): `forbid` (action → severity), `gravity` (stacks), `attract` (spring pull to center, stacks), `friction` (overrides world drag; smallest zone wins).
+
+```ts
+w.addZone({ id: 'ice', center, radius: 150, rules: { friction: 0.05, gravity: { x: 0, y: 140 } } });
+w.addZone({ id: 'well', center, radius: 110, rules: { attract: 420, friction: 3.5, forbid: { dash: 0.3 } } });
+```
+
+`src/level.ts` holds the first puzzle (**Slipstream**); tests brute-force prove it is solvable and that the straight shot fails.
+
 `npm i && npm run dev` · `npm test` · `npm run build` (outputs `dist/`, deploy to Cloudflare Pages).

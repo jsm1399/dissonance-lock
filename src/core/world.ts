@@ -4,6 +4,7 @@ import type { Anchor, Body, Echo, Vec, WorldEvent, Zone, ZoneDef } from './types
 export interface WorldOpts {
   width: number; height: number;
   drag?: number;          // velocity damping per second (default 1.2)
+  gravity?: Vec;          // global acceleration (default 0,0)
   restitution?: number;   // default 0.5
   maxLagCap?: number;     // history depth (default 64)
 }
@@ -88,7 +89,7 @@ export class World {
 
     let violated = false;
     for (const z of this.zones) {
-      const sev = z.rules.forbid[action];
+      const sev = z.rules.forbid?.[action];
       if (sev === undefined || !this.inZone(z, b.pos)) continue;
       violated = true;
       z.dissonance = Math.min(1, z.dissonance + sev);
@@ -151,11 +152,31 @@ export class World {
     this.echoes = keep;
   }
 
+  /** Effective physics rules at a point: gravity+attract stack, friction = smallest containing zone that sets it. */
+  fieldsAt(p: Vec): { gx: number; gy: number; friction: number } {
+    const g = this.opts.gravity;
+    let gx = g?.x ?? 0, gy = g?.y ?? 0, friction = this.drag, fr = Infinity;
+    for (const z of this.zones) {
+      const d = dist(z.center, p);
+      if (d > z.radius) continue;
+      const r = z.rules;
+      if (r.gravity) { gx += r.gravity.x; gy += r.gravity.y; }
+      if (r.attract && d > 0) {
+        const k = r.attract * (d / z.radius) / d; // magnitude attract*d/radius, direction to center
+        gx += (z.center.x - p.x) * k; gy += (z.center.y - p.y) * k;
+      }
+      if (r.friction !== undefined && z.radius < fr) { friction = r.friction; fr = z.radius; }
+    }
+    return { gx, gy, friction };
+  }
+
   private integrate(): void {
-    const damp = Math.max(0, 1 - this.drag * DT);
     for (const b of this.bodies) {
       if (b.invMass === 0) continue;
-      b.vel.x *= damp; b.vel.y *= damp;
+      const f = this.fieldsAt(b.pos);
+      const damp = Math.max(0, 1 - f.friction * DT);
+      b.vel.x = (b.vel.x + f.gx * DT) * damp;
+      b.vel.y = (b.vel.y + f.gy * DT) * damp;
       b.pos.x += b.vel.x * DT; b.pos.y += b.vel.y * DT;
     }
   }
