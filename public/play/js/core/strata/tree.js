@@ -1,0 +1,128 @@
+import { ClockMap } from "./clock.js";
+import { vadd, vsub, vscale, vdist, vzero } from "./vec.js";
+export const ROOT = "root";
+const pos = (x, name) => {
+    if (!(x > 0))
+        throw new RangeError(`${name} must be > 0, got ${x}`);
+};
+function upPos(d, p) {
+    let q = p;
+    for (let n = d; n && n.parent; n = n.parent)
+        q = vadd(n.origin, vscale(q, 1 / n.scale));
+    return q;
+}
+function downPos(d, p) {
+    let q = p;
+    for (const n of d.chain)
+        if (n.parent)
+            q = vscale(vsub(q, n.origin), n.scale);
+    return q;
+}
+export class StrataTree {
+    dim;
+    root;
+    byId = new Map();
+    kids = [];
+    constructor(dim, rootEchoSpeed) {
+        pos(rootEchoSpeed, "rootEchoSpeed");
+        this.dim = dim;
+        const root = {
+            id: ROOT, parent: null, depth: 0, origin: vzero(dim), scale: 1, extent: Infinity,
+            echoSpeed: rootEchoSpeed, clock: new ClockMap(), rootPerLocal: 1,
+            centerRoot: vzero(dim), radiusRoot: Infinity, chain: [],
+        };
+        root.chain.push(root);
+        this.root = root;
+        this.byId.set(ROOT, root);
+    }
+    get(id) {
+        const d = this.byId.get(id);
+        if (!d)
+            throw new Error(`unknown domain: ${id}`);
+        return d;
+    }
+    /** All non-root domains, in insertion order. */
+    domains() { return this.kids; }
+    add(s) {
+        if (this.byId.has(s.id))
+            throw new Error(`duplicate domain: ${s.id}`);
+        const parent = this.get(s.parent);
+        if (s.origin.length !== this.dim)
+            throw new RangeError("origin dimension mismatch");
+        pos(s.scale, "scale");
+        pos(s.extent, "extent");
+        pos(s.echoSpeed, "echoSpeed");
+        const node = {
+            id: s.id, parent, depth: parent.depth + 1, origin: s.origin, scale: s.scale,
+            extent: s.extent, echoSpeed: s.echoSpeed, shear: s.shear,
+            clock: new ClockMap(s.rate ?? 1, s.offset ?? 0),
+            rootPerLocal: parent.rootPerLocal / s.scale,
+            centerRoot: upPos(parent, s.origin),
+            radiusRoot: s.extent * parent.rootPerLocal,
+            chain: [],
+        };
+        node.chain.push(...parent.chain, node);
+        this.byId.set(s.id, node);
+        this.kids.push(node);
+        return node;
+    }
+    /** Change a domain's clock rate from PARENT time `parentTime` onward. */
+    setRate(id, parentTime, rate) {
+        const d = this.get(id);
+        if (!d.parent)
+            throw new Error("root clock is the global clock");
+        d.clock.setRate(parentTime, rate);
+    }
+    toRootPos(id, p) { return upPos(this.get(id), p); }
+    toLocalPos(id, p) { return downPos(this.get(id), p); }
+    toRootTime(id, t) {
+        for (let n = this.get(id); n && n.parent; n = n.parent)
+            t = n.clock.parent(t);
+        return t;
+    }
+    toLocalTime(id, t) {
+        for (const n of this.get(id).chain)
+            if (n.parent)
+                t = n.clock.local(t);
+        return t;
+    }
+    /** dt_local / dt_root for domain d at root time t. */
+    rateToRoot(d, tRoot) {
+        let t = tRoot, rho = 1;
+        for (const n of d.chain)
+            if (n.parent) {
+                rho *= n.clock.rateAt(t);
+                t = n.clock.local(t);
+            }
+        return rho;
+    }
+    /** Deepest domain containing root position p (ties: smaller radius, then first added). */
+    domainAt(p) {
+        let best = this.root;
+        for (const k of this.kids) {
+            if (vdist(p, k.centerRoot) > k.radiusRoot)
+                continue;
+            if (k.depth > best.depth || (k.depth === best.depth && k.radiusRoot < best.radiusRoot))
+                best = k;
+        }
+        return best;
+    }
+    /** Echo speed in ROOT length per ROOT time at root position p, root time t. */
+    speedAt(p, tRoot) {
+        const d = this.domainAt(p);
+        let shear = 1;
+        for (const n of d.chain)
+            if (n.shear)
+                shear *= n.shear(downPos(n, p));
+        const v = d.echoSpeed * d.rootPerLocal * this.rateToRoot(d, tRoot) * shear;
+        if (!(v > 0) || !Number.isFinite(v))
+            throw new RangeError(`non-positive echo speed in ${d.id}: ${v}`);
+        return v;
+    }
+    finestRadius() {
+        let r = Infinity;
+        for (const k of this.kids)
+            r = Math.min(r, k.radiusRoot);
+        return r;
+    }
+}
