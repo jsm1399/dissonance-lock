@@ -1,6 +1,7 @@
 import { hashSeed } from "./rng.js";
 export const SAVE_KEY = "dissonance-lock.save.v2";
 export const emptySave = (levels) => ({
+    tutorial: false,
     best: Array.from({ length: levels }, () => null),
     stars: Array.from({ length: levels }, () => 0),
     driftBest: 0,
@@ -20,6 +21,7 @@ export function parseSave(raw, levels) {
             out.best[i] = Array.isArray(j.best) ? num(j.best[i]) : null;
             out.stars[i] = Array.isArray(j.stars) ? Math.max(0, Math.min(3, num(j.stars[i]) ?? 0)) : 0;
         }
+        out.tutorial = j.tutorial === true;
         out.driftBest = Math.max(0, num(j.driftBest) ?? 0);
         if (j.daily && typeof j.daily.key === "string") {
             out.daily = { key: j.daily.key, depth: Math.max(0, num(j.daily.depth) ?? 0) };
@@ -30,3 +32,7 @@ export function parseSave(raw, levels) {
 }
 export const dailyKey = (d) => d.toISOString().slice(0, 10);
 export const dailySeed = (key) => hashSeed("daily", key);
+/** Plain-text result for sharing a Drift run. */
+export function shareText(label, cleared, url) {
+    return `Dissonance-Lock · ${label}\nDepth ${cleared} cleared\n${url}`;
+}

@@ -7,19 +7,22 @@ export interface Rect { x: number; y: number; w: number; h: number }
 export type Screen = "title" | "play" | "pause" | "end";
 
 export interface MenuItem { key: string; title: string; blurb: string; right: string }
-export interface EndInfo { title: string; good: boolean; lines: string[]; prompt: string }
+export interface EndInfo { title: string; good: boolean; lines: string[]; prompt: string; copy?: boolean }
+export interface HintView { text: string; sub: string; progress: number }
 
 export interface Ui {
   screen: Screen;
   sel: number;
   menu: MenuItem[];
   end: EndInfo | null;
+  hint: HintView | null;
+  toast: { text: string; until: number } | null;
   muted: boolean;
   /** performance.now() of last anchor / last heard pulse, for flashes */
   anchorAt: number;
   heardAt: number;
   heardHue: number;
-  hits: { rows: Rect[]; anchor: Rect; menu: Rect };
+  hits: { rows: Rect[]; anchor: Rect; menu: Rect; copy: Rect };
 }
 
 export interface View { w: number; h: number; x0: number; y0: number; s: number; hudH: number; stripH: number }
@@ -288,6 +291,44 @@ function drawWorld(c: CanvasRenderingContext2D, g: Game, ui: Ui, v: View, now: n
   c.strokeRect(v.x0 + 0.5, v.y0 + 0.5, WORLD * v.s - 1, WORLD * v.s - 1);
 }
 
+function drawHint(c: CanvasRenderingContext2D, ui: Ui, v: View): void {
+  const h = ui.hint;
+  if (!h) return;
+  const w = Math.min(WORLD * v.s - 16, 560);
+  const x = v.w / 2 - w / 2, y = v.y0 + 8;
+  c.fillStyle = "rgba(3,5,9,0.86)";
+  c.fillRect(x, y, w, 72);
+  c.strokeStyle = "rgba(127,219,202,0.7)";
+  c.strokeRect(x + 0.5, y + 0.5, w - 1, 71);
+  c.fillStyle = "#7fdbca";
+  c.fillRect(x, y + 70, w * h.progress, 2);
+  text(c, h.text, x + 12, y + 18, 14, "#7fdbca", "left", "700");
+  // wrap sub text
+  const words = h.sub.split(" ");
+  let line = "", ly = y + 38;
+  const maxW = w - 24;
+  c.font = `400 11px ${FONT}`;
+  for (const wd of words) {
+    const test = line ? `${line} ${wd}` : wd;
+    if (c.measureText(test).width > maxW && line) {
+      text(c, line, x + 12, ly, 11, "rgba(220,230,245,0.9)");
+      line = wd; ly += 14;
+    } else line = test;
+  }
+  if (line) text(c, line, x + 12, ly, 11, "rgba(220,230,245,0.9)");
+}
+
+function drawToast(c: CanvasRenderingContext2D, ui: Ui, v: View, now: number): void {
+  const t = ui.toast;
+  if (!t || now > t.until) return;
+  c.font = `700 12px ${FONT}`;
+  const w = c.measureText(t.text).width + 28;
+  const x = v.w / 2 - w / 2, y = v.h - v.stripH - 40;
+  c.fillStyle = "rgba(127,219,202,0.92)";
+  c.fillRect(x, y, w, 26);
+  text(c, t.text, v.w / 2, y + 14, 12, "#05070b", "center", "700");
+}
+
 function dim(c: CanvasRenderingContext2D, v: View, a: number): void {
   c.fillStyle = `rgba(3,5,9,${a})`;
   c.fillRect(0, 0, v.w, v.h);
@@ -342,6 +383,15 @@ function drawEnd(c: CanvasRenderingContext2D, ui: Ui, v: View): void {
   y += 14;
   text(c, e.prompt, cx, y, 14, "#e8f1ff", "center", "700");
   text(c, "Esc · menu", cx, y + 24, 11, "rgba(180,200,220,0.6)", "center");
+  if (e.copy) {
+    const r: Rect = { x: cx - 70, y: y + 42, w: 140, h: 32 };
+    ui.hits.copy = r;
+    c.fillStyle = "rgba(127,219,202,0.14)";
+    c.fillRect(r.x, r.y, r.w, r.h);
+    c.strokeStyle = "#7fdbca";
+    c.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    text(c, "C · copy result", cx, r.y + 17, 11, "#7fdbca", "center", "700");
+  }
 }
 
 export function draw(ctx: CanvasRenderingContext2D, g: Game | null, ui: Ui, v: View, now: number): void {
@@ -352,6 +402,7 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game | null, ui: Ui, v: V
     drawWorld(ctx, g, ui, v, now);
     drawHud(ctx, g, v, now);
     drawStrip(ctx, g, ui, v);
+    if (ui.screen === "play") drawHint(ctx, ui, v);
   }
   if (ui.screen === "title" || !g) {
     if (!g) {
@@ -372,5 +423,6 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game | null, ui: Ui, v: V
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     text(ctx, "MENU (Esc)", v.w / 2, r.y + 19, 12, "#7fdbca", "center", "700");
   } else if (ui.screen === "end") drawEnd(ctx, ui, v);
+  drawToast(ctx, ui, v, now);
   text(ctx, ui.muted ? "muted" : "", v.w - 10, v.h - v.stripH - 8, 10, "rgba(180,200,220,0.5)", "right");
 }

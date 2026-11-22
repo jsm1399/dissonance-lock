@@ -1,4 +1,4 @@
-const CACHE = "dissonance-lock-v0.7";
+const CACHE = "dissonance-lock-v0.8";
 const ASSETS = [
   "./",
   "./icon-192.png",
@@ -14,11 +14,13 @@ const ASSETS = [
   "./js/game/gen.js",
   "./js/game/levels.js",
   "./js/game/main.js",
+  "./js/game/pad.js",
   "./js/game/render.js",
   "./js/game/rng.js",
   "./js/game/save.js",
   "./js/game/sfx.js",
   "./js/game/state.js",
+  "./js/game/tutorial.js",
   "./manifest.webmanifest"
 ];
 self.addEventListener("install", (e) => {

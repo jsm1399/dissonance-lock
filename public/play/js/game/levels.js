@@ -58,6 +58,19 @@ function level5() {
     t.setRate("pocket", 40, 2);
     return t;
 }
+/** Interactive tutorial world: open medium, three beacons, forgiving lock. */
+export const TUTORIAL = {
+    id: 0, tag: "T", name: "Calibration",
+    blurb: "Learn to read the echoes. Two minutes.",
+    build: () => new StrataTree(2, 9),
+    beacons: [
+        { name: "A", domain: "root", pos: [14, 16], period: 2.2, phase: 0, hue: 190 },
+        { name: "B", domain: "root", pos: [86, 18], period: 2.7, phase: 0.5, hue: 40 },
+        { name: "C", domain: "root", pos: [50, 88], period: 3.2, phase: 1.0, hue: 300 },
+    ],
+    start: [50, 50],
+    gain: 22, decay: 6, spreadCap: 4.7, lockRate: 4, bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
+};
 export const LEVELS = [
     {
         id: 1, tag: "L1", name: "Quiet Shear",

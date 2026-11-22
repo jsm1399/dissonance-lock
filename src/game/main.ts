@@ -1,9 +1,12 @@
-import { LEVELS } from "./levels.js";
+import { LEVELS, TUTORIAL } from "./levels.js";
 import { MAX_CHARGES, newGame, stars, step, TICK, WORLD } from "./state.js";
 import type { Game, Input } from "./state.js";
 import { generateLevel } from "./gen.js";
-import { SAVE_KEY, dailyKey, dailySeed, parseSave } from "./save.js";
+import { SAVE_KEY, dailyKey, dailySeed, parseSave, shareText } from "./save.js";
 import type { SaveData } from "./save.js";
+import { advanceTutor, hintFor, newTutor, tutorProgress } from "./tutorial.js";
+import type { Tutor } from "./tutorial.js";
+import { readPad } from "./pad.js";
 import { draw, layout, resetRender } from "./render.js";
 import type { MenuItem, Rect, Ui, View } from "./render.js";
 import { sfx } from "./sfx.js";
@@ -21,36 +24,51 @@ function writeSave(): void {
 let save = loadSave();
 
 // ---------- run state ----------
-interface Run { kind: "campaign" | "drift"; idx: number; depth: number; daily: boolean; seed: number; carry: number }
+type Kind = "tutorial" | "campaign" | "drift";
+interface Run { kind: Kind; idx: number; depth: number; daily: boolean; seed: number; carry: number }
 let run: Run = { kind: "campaign", idx: 0, depth: 1, daily: false, seed: 0, carry: MAX_CHARGES };
 let game: Game | null = null;
+let tutor: Tutor | null = null;
 let acc = 0;
 let anchorQueued = false;
 
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const starStr = (n: number) => "★".repeat(n) + "☆".repeat(3 - n);
 
+let actions: (() => void)[] = [];
 function buildMenu(): MenuItem[] {
-  const items: MenuItem[] = LEVELS.map((L, i) => ({
-    key: String(i + 1), title: L.name, blurb: L.blurb,
-    right: save.best[i] === null ? "—" : `${starStr(save.stars[i])} ${fmtTime(save.best[i] as number)}`,
-  }));
+  const items: MenuItem[] = [];
+  actions = [];
+  const add = (m: MenuItem, a: () => void) => { items.push(m); actions.push(a); };
+  add(
+    { key: "0", title: TUTORIAL.name, blurb: TUTORIAL.blurb, right: save.tutorial ? "done ✓" : "start here" },
+    startTutorial,
+  );
+  LEVELS.forEach((L, i) => add(
+    { key: String(i + 1), title: L.name, blurb: L.blurb,
+      right: save.best[i] === null ? "—" : `${starStr(save.stars[i])} ${fmtTime(save.best[i] as number)}` },
+    () => startCampaign(i),
+  ));
   const today = dailyKey(new Date());
-  items.push({
-    key: "D", title: "Daily Drift", blurb: `endless · same worlds for everyone · ${today}`,
-    right: save.daily.key === today && save.daily.depth > 0 ? `depth ${save.daily.depth}` : "—",
-  });
-  items.push({
-    key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
-    right: save.driftBest > 0 ? `best ${save.driftBest}` : "—",
-  });
+  add(
+    { key: "D", title: "Daily Drift", blurb: `endless · same worlds for everyone · ${today}`,
+      right: save.daily.key === today && save.daily.depth > 0 ? `depth ${save.daily.depth}` : "—" },
+    () => startDrift(true),
+  );
+  add(
+    { key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
+      right: save.driftBest > 0 ? `best ${save.driftBest}` : "—" },
+    () => startDrift(false),
+  );
   return items;
 }
 
 const ui: Ui = {
-  screen: "title", sel: 0, menu: buildMenu(), end: null, muted: false,
+  screen: "title", sel: save.tutorial ? 1 : 0, menu: buildMenu(), end: null, hint: null, toast: null, muted: false,
   anchorAt: -1e9, heardAt: -1e9, heardHue: 0,
-  hits: { rows: [], anchor: { x: 0, y: 0, w: 0, h: 0 }, menu: { x: 0, y: 0, w: 0, h: 0 } },
+  hits: {
+    rows: [], anchor: { x: 0, y: 0, w: 0, h: 0 }, menu: { x: 0, y: 0, w: 0, h: 0 }, copy: { x: 0, y: 0, w: 0, h: 0 },
+  },
 };
 let view: View = layout(innerWidth, innerHeight);
 
@@ -65,9 +83,13 @@ function resize(): void {
 }
 
 function launch(): void {
-  const level = run.kind === "campaign" ? LEVELS[run.idx] : generateLevel(run.seed, run.depth);
+  const level = run.kind === "tutorial" ? TUTORIAL
+    : run.kind === "campaign" ? LEVELS[run.idx]
+    : generateLevel(run.seed, run.depth);
   game = newGame(level);
   if (run.kind === "drift") game.charges = run.carry;
+  tutor = run.kind === "tutorial" ? newTutor(game) : null;
+  ui.hint = null;
   resetRender();
   acc = 0;
   anchorQueued = false;
@@ -76,24 +98,21 @@ function launch(): void {
   sfx.unlock();
 }
 
-function startCampaign(i: number): void {
-  run = { kind: "campaign", idx: Math.max(0, Math.min(LEVELS.length - 1, i)), depth: 1, daily: false, seed: 0, carry: MAX_CHARGES };
-  launch();
-}
-
+const base = (kind: Kind): Run => ({ kind, idx: 0, depth: 1, daily: false, seed: 0, carry: MAX_CHARGES });
+function startTutorial(): void { run = base("tutorial"); launch(); }
+function startCampaign(i: number): void { run = { ...base("campaign"), idx: Math.max(0, Math.min(LEVELS.length - 1, i)) }; launch(); }
 function startDrift(daily: boolean): void {
   const seed = daily ? dailySeed(dailyKey(new Date())) : (Math.random() * 4294967296) >>> 0;
-  run = { kind: "drift", idx: -1, depth: 1, daily, seed, carry: MAX_CHARGES };
+  run = { ...base("drift"), daily, seed };
   launch();
 }
 
-function startItem(i: number): void {
-  if (i < LEVELS.length) startCampaign(i);
-  else startDrift(i === LEVELS.length);
-}
+function startItem(i: number): void { actions[i]?.(); }
 
 function toMenu(): void {
   game = null;
+  tutor = null;
+  ui.hint = null;
   resetRender();
   ui.menu = buildMenu();
   ui.screen = "title";
@@ -104,9 +123,22 @@ function restart(): void {
   launch();
 }
 
+function toast(text: string): void { ui.toast = { text, until: performance.now() + 1800 }; }
+
+function copyResult(): void {
+  if (!ui.end?.copy) return;
+  const cleared = run.kind === "drift" ? (game?.phase === "won" ? run.depth : run.depth - 1) : 0;
+  const label = run.daily ? `Daily Drift ${dailyKey(new Date())}` : "Free Drift";
+  const text = shareText(label, cleared, `${location.origin}/play/`);
+  try {
+    void navigator.clipboard.writeText(text).then(() => toast("result copied"), () => toast("copy unavailable"));
+  } catch { toast("copy unavailable"); }
+}
+
 // ---------- input ----------
 const keys = new Set<string>();
 const pointer = { down: false, x: 0, y: 0 };
+let padPrev = { confirm: false, back: false, pause: false, up: false, down: false };
 
 function readInput(): Input {
   let dx = 0, dy = 0;
@@ -114,6 +146,8 @@ function readInput(): Input {
   if (keys.has("arrowright") || keys.has("d")) dx += 1;
   if (keys.has("arrowup") || keys.has("w")) dy -= 1;
   if (keys.has("arrowdown") || keys.has("s")) dy += 1;
+  const pad = readPad(navigator.getGamepads?.()[0]);
+  if (dx === 0 && dy === 0) { dx = pad.dx; dy = pad.dy; }
   if (dx === 0 && dy === 0 && pointer.down && game) {
     const tx = (pointer.x - view.x0) / view.s - game.pos[0];
     const ty = (pointer.y - view.y0) / view.s - game.pos[1];
@@ -127,7 +161,9 @@ const inside = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && 
 
 function advance(): void {
   const won = game?.phase === "won";
-  if (run.kind === "campaign") {
+  if (run.kind === "tutorial") {
+    if (won) startCampaign(0); else launch();
+  } else if (run.kind === "campaign") {
     if (won && run.idx < LEVELS.length - 1) { run.idx++; launch(); }
     else if (won) toMenu();
     else launch();
@@ -135,7 +171,6 @@ function advance(): void {
     run.depth++;
     launch();
   } else {
-    // drift lost: new attempt (daily replays the same seed, free rolls a new one)
     run = { ...run, depth: 1, carry: MAX_CHARGES, seed: run.daily ? run.seed : (Math.random() * 4294967296) >>> 0 };
     launch();
   }
@@ -159,6 +194,7 @@ addEventListener("keydown", (e) => {
   if (ui.screen === "end") {
     if (k === "enter" || k === " ") advance();
     else if (k === "escape") toMenu();
+    else if (k === "c") copyResult();
     return;
   }
   if (ui.screen === "pause") {
@@ -183,7 +219,10 @@ canvas.addEventListener("pointerdown", (e) => {
     if (i >= 0) { ui.sel = i; startItem(i); }
     return;
   }
-  if (ui.screen === "end") { advance(); return; }
+  if (ui.screen === "end") {
+    if (ui.end?.copy && inside(ui.hits.copy, e.offsetX, e.offsetY)) copyResult(); else advance();
+    return;
+  }
   if (ui.screen === "pause") {
     if (inside(ui.hits.menu, e.offsetX, e.offsetY)) toMenu(); else ui.screen = "play";
     return;
@@ -197,14 +236,47 @@ const up = () => { pointer.down = false; };
 canvas.addEventListener("pointerup", up);
 canvas.addEventListener("pointercancel", up);
 
+/** Gamepad edge-triggered actions (movement is polled in readInput). */
+function pollPadButtons(): void {
+  const p = readPad(navigator.getGamepads?.()[0]);
+  const edge = (cur: boolean, prev: boolean) => cur && !prev;
+  const confirm = edge(p.confirm, padPrev.confirm), back = edge(p.back, padPrev.back);
+  const pause = edge(p.pause, padPrev.pause), upE = edge(p.up, padPrev.up), downE = edge(p.down, padPrev.down);
+  padPrev = { confirm: p.confirm, back: p.back, pause: p.pause, up: p.up, down: p.down };
+  if (ui.screen === "title") {
+    const n = ui.menu.length;
+    if (upE) ui.sel = (ui.sel + n - 1) % n;
+    if (downE) ui.sel = (ui.sel + 1) % n;
+    if (confirm) startItem(ui.sel);
+  } else if (ui.screen === "end") {
+    if (confirm) advance();
+    if (back) toMenu();
+  } else if (ui.screen === "pause") {
+    if (confirm || pause) ui.screen = "play";
+    if (back) toMenu();
+  } else if (ui.screen === "play") {
+    if (confirm) anchorQueued = true;
+    if (pause) ui.screen = "pause";
+  }
+}
+
 // ---------- game events ----------
 function onWon(g: Game): void {
   const t = Math.round(g.time * 10) / 10;
   const st = stars(g);
-  if (run.kind === "campaign") {
+  if (run.kind === "tutorial") {
+    save.tutorial = true;
+    writeSave();
+    ui.end = {
+      title: "CALIBRATED", good: true,
+      lines: ["You can read the echoes.", "Campaign next: new domains bend time."],
+      prompt: "Enter · Level 1",
+    };
+  } else if (run.kind === "campaign") {
     const prev = save.best[run.idx];
     if (prev === null || t < prev) save.best[run.idx] = t;
     save.stars[run.idx] = Math.max(save.stars[run.idx], st);
+    save.tutorial = true;
     writeSave();
     const last = run.idx >= LEVELS.length - 1;
     ui.end = {
@@ -221,7 +293,7 @@ function onWon(g: Game): void {
     ui.end = {
       title: `DEPTH ${run.depth} CLEARED`, good: true,
       lines: [`${fmtTime(g.time)} · anchors used ${g.anchors}`, `charges carried: ${run.carry}`],
-      prompt: "Enter · descend",
+      prompt: "Enter · descend", copy: true,
     };
   }
   ui.screen = "end";
@@ -234,7 +306,7 @@ function onLost(g: Game): void {
     ui.end = {
       title: "DRIFT ENDED", good: false,
       lines: [`cleared ${cleared} level${cleared === 1 ? "" : "s"}`, run.daily ? "daily seed: same worlds again" : "new seed on retry"],
-      prompt: "Enter · try again",
+      prompt: "Enter · try again", copy: true,
     };
   } else {
     ui.end = { title: "OVERLOAD", good: false, lines: [`${g.level.name} · ${fmtTime(g.time)}`], prompt: "Enter · retry" };
@@ -263,6 +335,7 @@ let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  pollPadButtons();
   if (ui.screen === "play" && game) {
     acc += dt;
     for (let n = 0; acc >= TICK && n < 5 && game.phase === "playing"; n++) {
@@ -270,7 +343,12 @@ function frame(now: number): void {
       anchorQueued = false;
       acc -= TICK;
       handleEvents(game);
+      if (tutor) advanceTutor(tutor, game);
     }
+    if (tutor && game.phase === "playing") {
+      const h = hintFor(tutor);
+      ui.hint = { text: h.text, sub: h.sub, progress: tutorProgress(tutor) };
+    } else ui.hint = null;
   }
   draw(ctx, game, ui, view, now);
   requestAnimationFrame(frame);
@@ -286,6 +364,7 @@ resize();
     screen: ui.screen, run: { ...run }, phase: game?.phase ?? null, time: game?.time ?? 0,
     dissonance: game?.dissonance ?? 0, lock: game?.lock ?? 0, pos: game?.pos ?? null, world: WORLD,
     tag: game?.level.tag ?? null, end: ui.end, charges: game?.charges ?? 0,
+    tutorStep: tutor?.step ?? null, hint: ui.hint?.text ?? null, menuLen: ui.menu.length,
   }),
   game: () => game,
   save: () => save,

@@ -48,6 +48,7 @@ export interface Game {
   spread: number;
   pressure: number;
   anchors: number;
+  heardTotal: number;
   peak: number;
   events: GameEvent[];
 }
@@ -59,7 +60,7 @@ export function newGame(level: LevelDef): Game {
     level, tree: level.build(), time: 0, pos: level.start.slice(), phase: "playing",
     dissonance: 0, lock: 0, charges: MAX_CHARGES, chargeTimer: 0,
     flight: [], heard: [], nextK: level.beacons.map(() => 1), nextId: 0,
-    inversions: 0, spread: 0, pressure: 0, anchors: 0, peak: 0, events: [],
+    inversions: 0, spread: 0, pressure: 0, anchors: 0, heardTotal: 0, peak: 0, events: [],
   };
 }
 
@@ -99,6 +100,7 @@ export function step(g: Game, input: Input): void {
     if (p.arrival <= g.time) {
       p.perceivedAt = Math.max(p.arrival, p.emitRoot);
       g.heard.push(p);
+      g.heardTotal++;
       g.events.push({ kind: "heard", pulse: p });
     } else still.push(p);
   }
