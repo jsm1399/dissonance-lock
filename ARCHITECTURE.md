@@ -11,6 +11,7 @@ src/demo/      Browser canvas demo
 - **Lag**: entities in a dissonant domain get `lag` ticks (slewed 1/tick). `perceived(id)` is the lagged frame hosts use for contacts, so hitboxes trail reality (offset collisions).
 - **Echoes**: a violation schedules delayed, decaying re-impulses (`echoCount`, `echoGain`, `echoDelay`). Delivered as `EchoHit[]`; the host applies them. The core never mutates host physics.
 - **Echo ripple**: `ripple` radius with linear falloff. `echoSpeed` makes it a causal wavefront (default `Infinity` = instant).
+- **Nesting & clocks**: `parent` links domains; `clock` sets local time rate relative to the parent (rates multiply down the tree). Echo delays, wavefront speed and decay run on the domain's local time. Rules inherit (child overrides, `0` permits). Violations count in the deepest domain and leak upward scaled by `bleed`, echoing at each level on its own clock.
 - **Re-anchor**: anchors cut dissonance and purge pending echoes.
 
 Host frame: `hits = field.begin()` → apply hits, integrate, contacts via `perceived()` → `field.commit()`.
