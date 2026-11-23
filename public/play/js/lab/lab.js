@@ -1,4 +1,4 @@
-import { arrivalField, countInversions, lagSpread, march } from "../core/strata/index.js";
+import { arrivalField, countInversions, fermatField, lagSpread, march, sampleField } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
 export const SIZE = 100;
@@ -16,7 +16,7 @@ export function newLab(spec = defaultWorld()) {
     }
     return {
         spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], sel: null, tool: "select",
-        seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(),
+        seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0,
     };
 }
 export function rebuild(lab) {
@@ -24,6 +24,8 @@ export function rebuild(lab) {
     lab.heat = null;
     lab.arrivals.clear();
     lab.rays.clear();
+    lab.fields.clear();
+    lab.bent.clear();
     lab.rev++;
 }
 export function addDomain(lab, kind, at) {
@@ -86,6 +88,7 @@ export function moveSel(lab, sel, to) {
         lab.probe = at;
         lab.arrivals.clear();
         lab.rays.clear();
+        lab.bent.clear();
         return;
     }
     if (sel.kind === "emitter") {
@@ -193,10 +196,58 @@ export function rayAt(lab, em) {
     }
     return r;
 }
+export const BENT_N = 40;
+const BOX_MIN = [0, 0], BOX_MAX = [SIZE, SIZE];
+export const isBent = (lab) => lawsOf(lab.spec).path === "bent";
+/** Bent-path arrival field of one emission; null until solved (see `pumpFields`). */
+export function fieldOf(lab, em, build = false) {
+    const key = `${em.emitter}|${em.k}`;
+    let f = lab.fields.get(key);
+    if (!f && build) {
+        f = fermatField(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, BOX_MIN, BOX_MAX, BENT_N);
+        lab.fields.set(key, f);
+    }
+    return f ?? null;
+}
+/**
+ * Arrival of an emission at the probe. Under the bent law: the Fermat field sampled at the probe
+ * (never later than the straight chord, which is also a valid path); the chord until the field is solved.
+ */
 export function arrivalAt(lab, em) {
     const key = `${em.emitter}|${em.k}`;
+    if (isBent(lab)) {
+        const f = fieldOf(lab, em);
+        if (!f)
+            return rayAt(lab, em).rootTime;
+        let a = lab.bent.get(key);
+        if (a === undefined) {
+            a = Math.min(rayAt(lab, em).rootTime, sampleField(f, BOX_MIN, BOX_MAX, lab.probe));
+            lab.bent.set(key, a);
+        }
+        return a;
+    }
     const a = lab.arrivals.get(key);
     return a !== undefined ? a : rayAt(lab, em).rootTime;
+}
+/** Solve missing bent fields, newest first, until the time budget is spent. Returns how many remain. */
+export function pumpFields(lab, budgetMs = 10) {
+    if (!isBent(lab)) {
+        lab.pending = 0;
+        return 0;
+    }
+    const want = emissionsUpTo(lab, lab.t, 6).filter((e) => lab.t - e.launchRoot < 60).sort((a, b) => b.launchRoot - a.launchRoot);
+    const t0 = performance.now();
+    let left = 0;
+    for (const em of want) {
+        if (fieldOf(lab, em))
+            continue;
+        if (performance.now() - t0 < budgetMs)
+            fieldOf(lab, em, true);
+        else
+            left++;
+    }
+    lab.pending = left;
+    return left;
 }
 /** Everything the probe has perceived by lab.t, in perceived order. */
 export function perceived(lab, per = 6) {
@@ -229,11 +280,14 @@ export function computeHeat(lab, emitterId, n = 40) {
         return false;
     const tl = lab.tree.toLocalTime(e.domain, lab.t);
     const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
-    const field = arrivalField(lab.tree, { domain: e.domain, pos: e.pos }, e.phase + k * e.period, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
+    const from = { domain: e.domain, pos: e.pos }, tEmit = e.phase + k * e.period;
+    const field = isBent(lab)
+        ? fermatField(lab.tree, from, tEmit, BOX_MIN, BOX_MAX, n)
+        : arrivalField(lab.tree, from, tEmit, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
     lab.heat = { emitter: emitterId, k, field };
     return true;
 }
-export const LAW_KEYS = ["time", "medium", "dim", "loss", "noise", "gauss"];
+export const LAW_KEYS = ["time", "medium", "dim", "loss", "noise", "gauss", "path"];
 const nextIn = (steps, v) => {
     const i = steps.indexOf(v);
     return steps[(i + 1) % steps.length];
@@ -252,6 +306,8 @@ export function cycleLaw(lab, key) {
         next.loss = nextIn(LOSS_STEPS, cur.loss);
     else if (key === "noise")
         next.noise = nextIn(NOISE_STEPS, cur.noise);
+    else if (key === "path")
+        next.path = cur.path === "straight" ? "bent" : "straight";
     else
         next.gauss = cur.gauss === "holds" ? "leaky" : cur.gauss === "leaky" ? "runaway" : "holds";
     lab.spec.laws = next;

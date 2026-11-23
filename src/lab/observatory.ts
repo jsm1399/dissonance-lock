@@ -1,11 +1,11 @@
-import { wavefront } from "../core/strata/index.js";
+import { contour, wavefront } from "../core/strata/index.js";
 import type { Vec } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
 import type { Laws } from "../core/laws/index.js";
 import {
   LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, adjust, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo,
-  hitTest, metrics, moveSel, newLab, perceived, removeSel, resetLaws,
+  fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws,
 } from "./lab.js";
 import type { LawKey, Lab, Sel, Tool } from "./lab.js";
 import { defaultWorld, lawsOf } from "./world.js";
@@ -28,8 +28,8 @@ const TOOLS: { id: Tool; label: string }[] = [
 ];
 const BOT_H = 150;
 
-const LAW_HOTKEY: Record<string, LawKey> = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss" };
-const LAW_TITLE: Record<LawKey, string> = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS" };
+const LAW_HOTKEY: Record<string, LawKey> = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
+const LAW_TITLE: Record<LawKey, string> = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
 const lawValue = (k: LawKey, L: Laws): string => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
 const lawLabel = (k: LawKey, L: Laws): string => `${LAW_TITLE[k]}·${lawValue(k, L)}`;
 const lawIsDefault = (k: LawKey, L: Laws): boolean => L[k] === LAWFUL[k];
@@ -194,11 +194,21 @@ export function createObservatory(hooks: Hooks): Observatory {
     }
     // wavefronts
     const used = new Set<string>();
+    const bent = isBent(l);
     for (const em of emissionsUpTo(l, l.t, 3)) {
       const age = l.t - em.launchRoot;
       if (age < 0 || age > 45) continue;
       const key = `${l.rev}|${em.emitter}|${em.k}`;
       used.add(key);
+      const f = bent ? fieldOf(l, em) : null;
+      if (f) {
+        // bent law: the true wavefront is the level set arrival == now of the Fermat field
+        c.beginPath();
+        for (const sg of contour(f, [0, 0], [SIZE, SIZE], l.t)) { c.moveTo(X(sg[0]), Y(sg[1])); c.lineTo(X(sg[2]), Y(sg[3])); }
+        c.strokeStyle = hsl(em.hue, 80, 62, Math.max(0.1, 0.75 - age / 55));
+        c.lineWidth = 1.5; c.stroke();
+        continue;
+      }
       let c0 = wf.get(key);
       if (!c0 || Math.abs(l.t - c0.t) >= 0.12) {
         c0 = { t: l.t, poly: wavefront(l.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, l.t, 48, 170, 1.5) };
@@ -278,7 +288,7 @@ export function createObservatory(hooks: Hooks): Observatory {
 
     const m = metrics(l);
     text(c, "PROBE", 14, botTop + 46, 10, "rgba(180,200,220,0.6)");
-    text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}`, 64, botTop + 46, 12, "rgba(220,232,248,0.95)");
+    text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}${l.pending > 0 ? ` · solving bent paths (${l.pending})` : ""}`, 64, botTop + 46, 12, "rgba(220,232,248,0.95)");
     const heard = perceived(l).filter((p) => p.arrival >= l.t - 12).slice(-12);
     const byEmit = heard.slice().sort((a, b) => a.emission.launchRoot - b.emission.launchRoot);
     let maxRank = -1;
@@ -302,7 +312,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
       text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
     }
-    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss";
+    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
     if (l.sel?.kind === "domain") {
       const d = l.spec.domains.find((q) => q.id === l.sel?.id);
       if (d) info = `${d.id} · ${d.shearMin !== null ? "shear well" : "clock domain"} · size ${d.extent.toFixed(1)} · rate ${d.rate.toFixed(2)} · drifts ${d.changes.length}   [ ] size · - = rate · , . drift at t · Del`;
@@ -348,6 +358,7 @@ export function createObservatory(hooks: Hooks): Observatory {
         if (lab.t >= TMAX) { lab.t = TMAX; lab.playing = false; }
       }
       if (lab.rev !== lastRev) { lastRev = lab.rev; hooks.onChange(lab.spec); }
+      pumpFields(lab);
       layout(ctx, w, h);
       ctx.fillStyle = "#05070b"; ctx.fillRect(0, 0, w, h);
       drawWorld(ctx, lab, now);

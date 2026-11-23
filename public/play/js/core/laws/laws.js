@@ -1,11 +1,11 @@
 export const DIM_MIN = 2;
 export const DIM_MAX = 6;
-export const LAWFUL = { time: "local", medium: "strata", dim: 2, loss: 0, noise: 0, gauss: "holds" };
+export const LAWFUL = { time: "local", medium: "strata", dim: 2, loss: 0, noise: 0, gauss: "holds", path: "straight" };
 export const LOSS_STEPS = [0, 0.01, 0.03, 0.1];
 export const NOISE_STEPS = [0, 0.02, 0.06];
 export const cloneLaws = (l) => ({ ...l });
 export const isLawful = (l) => l.time === LAWFUL.time && l.medium === LAWFUL.medium && l.dim === LAWFUL.dim &&
-    l.loss === LAWFUL.loss && l.noise === LAWFUL.noise && l.gauss === LAWFUL.gauss;
+    l.loss === LAWFUL.loss && l.noise === LAWFUL.noise && l.gauss === LAWFUL.gauss && l.path === LAWFUL.path;
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
 /** Human-readable problems; empty array = valid. */
 export function validateLaws(l) {
@@ -22,6 +22,8 @@ export function validateLaws(l) {
         e.push("noise must be in [0,1]");
     if (l.gauss !== "holds" && l.gauss !== "leaky" && l.gauss !== "runaway")
         e.push("gauss must be holds|leaky|runaway");
+    if (l.path !== "straight" && l.path !== "bent")
+        e.push("path law must be straight|bent");
     return e;
 }
 /** Strict parse of untrusted data: undefined -> LAWFUL, anything malformed -> null. */
@@ -34,6 +36,7 @@ export function parseLaws(raw) {
     const l = {
         time: j.time, medium: j.medium, dim: j.dim,
         loss: j.loss, noise: j.noise, gauss: j.gauss,
+        path: (j.path === undefined ? "straight" : j.path), // links made before v1.1 have no path law
     };
     return validateLaws(l).length === 0 ? l : null;
 }

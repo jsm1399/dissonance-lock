@@ -1,4 +1,4 @@
-import { arrivalField, countInversions, lagSpread, march } from "../core/strata/index.js";
+import { arrivalField, countInversions, fermatField, lagSpread, march, sampleField } from "../core/strata/index.js";
 import type { Arrival, ArrivalField, StrataTree, Vec } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
 import type { Laws, RayAudit } from "../core/laws/index.js";
@@ -42,6 +42,12 @@ export interface Lab {
   arrivals: Map<string, number>;
   /** full marches (with per-domain path segments) for the current probe */
   rays: Map<string, Arrival>;
+  /** bent-path (Fermat) arrival fields per emission, valid for the current rev */
+  fields: Map<string, ArrivalField>;
+  /** bent arrival at the current probe, per emission */
+  bent: Map<string, number>;
+  /** bent fields still being solved (0 = all ready) */
+  pending: number;
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -55,7 +61,7 @@ export function newLab(spec: WorldSpec = defaultWorld()): Lab {
   }
   return {
     spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], sel: null, tool: "select",
-    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(),
+    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0,
   };
 }
 
@@ -64,6 +70,8 @@ export function rebuild(lab: Lab): void {
   lab.heat = null;
   lab.arrivals.clear();
   lab.rays.clear();
+  lab.fields.clear();
+  lab.bent.clear();
   lab.rev++;
 }
 
@@ -117,7 +125,7 @@ export function hitTest(lab: Lab, at: Vec): Sel | null {
 
 export function moveSel(lab: Lab, sel: Sel, to: Vec): void {
   const at = clampPt(to);
-  if (sel.kind === "probe") { lab.probe = at; lab.arrivals.clear(); lab.rays.clear(); return; }
+  if (sel.kind === "probe") { lab.probe = at; lab.arrivals.clear(); lab.rays.clear(); lab.bent.clear(); return; }
   if (sel.kind === "emitter") {
     const e = lab.spec.emitters.find((x) => x.id === sel.id);
     if (!e) return;
@@ -208,10 +216,53 @@ export function rayAt(lab: Lab, em: Emission): Arrival {
   return r;
 }
 
+export const BENT_N = 40;
+const BOX_MIN: Vec = [0, 0], BOX_MAX: Vec = [SIZE, SIZE];
+export const isBent = (lab: Lab): boolean => lawsOf(lab.spec).path === "bent";
+
+/** Bent-path arrival field of one emission; null until solved (see `pumpFields`). */
+export function fieldOf(lab: Lab, em: Emission, build = false): ArrivalField | null {
+  const key = `${em.emitter}|${em.k}`;
+  let f = lab.fields.get(key);
+  if (!f && build) {
+    f = fermatField(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, BOX_MIN, BOX_MAX, BENT_N);
+    lab.fields.set(key, f);
+  }
+  return f ?? null;
+}
+
+/**
+ * Arrival of an emission at the probe. Under the bent law: the Fermat field sampled at the probe
+ * (never later than the straight chord, which is also a valid path); the chord until the field is solved.
+ */
 export function arrivalAt(lab: Lab, em: Emission): number {
   const key = `${em.emitter}|${em.k}`;
+  if (isBent(lab)) {
+    const f = fieldOf(lab, em);
+    if (!f) return rayAt(lab, em).rootTime;
+    let a = lab.bent.get(key);
+    if (a === undefined) {
+      a = Math.min(rayAt(lab, em).rootTime, sampleField(f, BOX_MIN, BOX_MAX, lab.probe));
+      lab.bent.set(key, a);
+    }
+    return a;
+  }
   const a = lab.arrivals.get(key);
   return a !== undefined ? a : rayAt(lab, em).rootTime;
+}
+
+/** Solve missing bent fields, newest first, until the time budget is spent. Returns how many remain. */
+export function pumpFields(lab: Lab, budgetMs = 10): number {
+  if (!isBent(lab)) { lab.pending = 0; return 0; }
+  const want = emissionsUpTo(lab, lab.t, 6).filter((e) => lab.t - e.launchRoot < 60).sort((a, b) => b.launchRoot - a.launchRoot);
+  const t0 = performance.now();
+  let left = 0;
+  for (const em of want) {
+    if (fieldOf(lab, em)) continue;
+    if (performance.now() - t0 < budgetMs) fieldOf(lab, em, true); else left++;
+  }
+  lab.pending = left;
+  return left;
 }
 
 /** Everything the probe has perceived by lab.t, in perceived order. */
@@ -246,14 +297,17 @@ export function computeHeat(lab: Lab, emitterId: string, n = 40): boolean {
   if (!e) return false;
   const tl = lab.tree.toLocalTime(e.domain, lab.t);
   const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
-  const field = arrivalField(lab.tree, { domain: e.domain, pos: e.pos }, e.phase + k * e.period, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
+  const from = { domain: e.domain, pos: e.pos }, tEmit = e.phase + k * e.period;
+  const field = isBent(lab)
+    ? fermatField(lab.tree, from, tEmit, BOX_MIN, BOX_MAX, n)
+    : arrivalField(lab.tree, from, tEmit, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
   lab.heat = { emitter: emitterId, k, field };
   return true;
 }
 
 // ---------- Lawbook ----------
-export type LawKey = "time" | "medium" | "dim" | "loss" | "noise" | "gauss";
-export const LAW_KEYS: LawKey[] = ["time", "medium", "dim", "loss", "noise", "gauss"];
+export type LawKey = "time" | "medium" | "dim" | "loss" | "noise" | "gauss" | "path";
+export const LAW_KEYS: LawKey[] = ["time", "medium", "dim", "loss", "noise", "gauss", "path"];
 
 const nextIn = (steps: number[], v: number): number => {
   const i = steps.indexOf(v);
@@ -269,6 +323,7 @@ export function cycleLaw(lab: Lab, key: LawKey): Laws {
   else if (key === "dim") next.dim = cur.dim >= DIM_MAX ? DIM_MIN : cur.dim + 1;
   else if (key === "loss") next.loss = nextIn(LOSS_STEPS, cur.loss);
   else if (key === "noise") next.noise = nextIn(NOISE_STEPS, cur.noise);
+  else if (key === "path") next.path = cur.path === "straight" ? "bent" : "straight";
   else next.gauss = cur.gauss === "holds" ? "leaky" : cur.gauss === "leaky" ? "runaway" : "holds";
   lab.spec.laws = next;
   rebuild(lab);

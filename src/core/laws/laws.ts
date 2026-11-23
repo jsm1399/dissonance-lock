@@ -6,6 +6,8 @@ export type TimeLaw = "local" | "global";
 export type MediumLaw = "strata" | "uniform";
 /** How flux dilutes with distance. holds = Gauss (r^-(D-1)); leaky dilutes too fast; runaway too slowly. */
 export type GaussLaw = "holds" | "leaky" | "runaway";
+/** straight: one straight chord per signal (fast, upper bound). bent: Fermat paths that refract around slow regions. */
+export type PathLaw = "straight" | "bent";
 
 export interface Laws {
   /** local: every domain keeps its own clock. global: one clock for all (domain rates/drifts ignored). */
@@ -19,12 +21,14 @@ export interface Laws {
   /** Information fidelity lost per unit root length travelled inside shear wells (>= 0). */
   noise: number;
   gauss: GaussLaw;
+  /** How signals travel through the strata (absent in older links = straight). */
+  path: PathLaw;
 }
 
 export const DIM_MIN = 2;
 export const DIM_MAX = 6;
 
-export const LAWFUL: Laws = { time: "local", medium: "strata", dim: 2, loss: 0, noise: 0, gauss: "holds" };
+export const LAWFUL: Laws = { time: "local", medium: "strata", dim: 2, loss: 0, noise: 0, gauss: "holds", path: "straight" };
 
 export const LOSS_STEPS = [0, 0.01, 0.03, 0.1];
 export const NOISE_STEPS = [0, 0.02, 0.06];
@@ -32,7 +36,7 @@ export const NOISE_STEPS = [0, 0.02, 0.06];
 export const cloneLaws = (l: Laws): Laws => ({ ...l });
 export const isLawful = (l: Laws): boolean =>
   l.time === LAWFUL.time && l.medium === LAWFUL.medium && l.dim === LAWFUL.dim &&
-  l.loss === LAWFUL.loss && l.noise === LAWFUL.noise && l.gauss === LAWFUL.gauss;
+  l.loss === LAWFUL.loss && l.noise === LAWFUL.noise && l.gauss === LAWFUL.gauss && l.path === LAWFUL.path;
 
 const fin = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 
@@ -45,6 +49,7 @@ export function validateLaws(l: Laws): string[] {
   if (!fin(l.loss) || l.loss < 0 || l.loss > 1) e.push("loss must be in [0,1]");
   if (!fin(l.noise) || l.noise < 0 || l.noise > 1) e.push("noise must be in [0,1]");
   if (l.gauss !== "holds" && l.gauss !== "leaky" && l.gauss !== "runaway") e.push("gauss must be holds|leaky|runaway");
+  if (l.path !== "straight" && l.path !== "bent") e.push("path law must be straight|bent");
   return e;
 }
 
@@ -56,6 +61,7 @@ export function parseLaws(raw: unknown): Laws | null {
   const l: Laws = {
     time: j.time as TimeLaw, medium: j.medium as MediumLaw, dim: j.dim as number,
     loss: j.loss as number, noise: j.noise as number, gauss: j.gauss as GaussLaw,
+    path: (j.path === undefined ? "straight" : j.path) as PathLaw, // links made before v1.1 have no path law
   };
   return validateLaws(l).length === 0 ? l : null;
 }

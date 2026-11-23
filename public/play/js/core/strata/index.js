@@ -4,3 +4,4 @@ export * from "./tree.js";
 export * from "./propagate.js";
 export * from "./ledger.js";
 export * from "./dissonance.js";
+export * from "./fermat.js";
