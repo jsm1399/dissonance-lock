@@ -1,9 +1,12 @@
-const CACHE = "dissonance-lock-v0.9.1";
+const CACHE = "dissonance-lock-v1.0";
 const ASSETS = [
   "./",
   "./icon-192.png",
   "./icon-512.png",
   "./index.html",
+  "./js/core/laws/audit.js",
+  "./js/core/laws/index.js",
+  "./js/core/laws/laws.js",
   "./js/core/strata/clock.js",
   "./js/core/strata/dissonance.js",
   "./js/core/strata/index.js",

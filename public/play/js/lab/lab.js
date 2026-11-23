@@ -1,5 +1,6 @@
 import { arrivalField, countInversions, lagSpread, march } from "../core/strata/index.js";
-import { LIMITS, buildTree, defaultWorld } from "./world.js";
+import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
+import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
 export const SIZE = 100;
 export const TMAX = 240;
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
@@ -15,13 +16,14 @@ export function newLab(spec = defaultWorld()) {
     }
     return {
         spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], sel: null, tool: "select",
-        seq, heat: null, rev: 0, arrivals: new Map(),
+        seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(),
     };
 }
 export function rebuild(lab) {
     lab.tree = buildTree(lab.spec);
     lab.heat = null;
     lab.arrivals.clear();
+    lab.rays.clear();
     lab.rev++;
 }
 export function addDomain(lab, kind, at) {
@@ -83,6 +85,7 @@ export function moveSel(lab, sel, to) {
     if (sel.kind === "probe") {
         lab.probe = at;
         lab.arrivals.clear();
+        lab.rays.clear();
         return;
     }
     if (sel.kind === "emitter") {
@@ -180,14 +183,20 @@ export function emissionsUpTo(lab, tRoot, per) {
     }
     return out;
 }
+export function rayAt(lab, em) {
+    const key = `${em.emitter}|${em.k}`;
+    let r = lab.rays.get(key);
+    if (!r || !lab.arrivals.has(key)) { // arrivals is the cache's authority: cleared => recompute
+        r = march(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, { domain: "root", pos: lab.probe }, MARCH);
+        lab.rays.set(key, r);
+        lab.arrivals.set(key, r.rootTime);
+    }
+    return r;
+}
 export function arrivalAt(lab, em) {
     const key = `${em.emitter}|${em.k}`;
-    let a = lab.arrivals.get(key);
-    if (a === undefined) {
-        a = march(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, { domain: "root", pos: lab.probe }, MARCH).rootTime;
-        lab.arrivals.set(key, a);
-    }
-    return a;
+    const a = lab.arrivals.get(key);
+    return a !== undefined ? a : rayAt(lab, em).rootTime;
 }
 /** Everything the probe has perceived by lab.t, in perceived order. */
 export function perceived(lab, per = 6) {
@@ -224,3 +233,48 @@ export function computeHeat(lab, emitterId, n = 40) {
     lab.heat = { emitter: emitterId, k, field };
     return true;
 }
+export const LAW_KEYS = ["time", "medium", "dim", "loss", "noise", "gauss"];
+const nextIn = (steps, v) => {
+    const i = steps.indexOf(v);
+    return steps[(i + 1) % steps.length];
+};
+/** Cycle one law to its next value and rebuild the world under it. */
+export function cycleLaw(lab, key) {
+    const cur = lawsOf(lab.spec);
+    const next = { ...cur };
+    if (key === "time")
+        next.time = cur.time === "local" ? "global" : "local";
+    else if (key === "medium")
+        next.medium = cur.medium === "strata" ? "uniform" : "strata";
+    else if (key === "dim")
+        next.dim = cur.dim >= DIM_MAX ? DIM_MIN : cur.dim + 1;
+    else if (key === "loss")
+        next.loss = nextIn(LOSS_STEPS, cur.loss);
+    else if (key === "noise")
+        next.noise = nextIn(NOISE_STEPS, cur.noise);
+    else
+        next.gauss = cur.gauss === "holds" ? "leaky" : cur.gauss === "leaky" ? "runaway" : "holds";
+    lab.spec.laws = next;
+    rebuild(lab);
+    return next;
+}
+export function resetLaws(lab) {
+    lab.spec.laws = { ...LAWFUL };
+    rebuild(lab);
+}
+/** Conservation audit of the latest emission of an emitter (default: selected, else first) along the chord to the probe. */
+export function auditEmitter(lab, emitterId) {
+    const id = emitterId ?? (lab.sel?.kind === "emitter" ? lab.sel.id : lab.spec.emitters[0]?.id);
+    const e = lab.spec.emitters.find((x) => x.id === id);
+    if (!e)
+        return null;
+    const tl = lab.tree.toLocalTime(e.domain, lab.t);
+    const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
+    const launchLocal = e.phase + k * e.period;
+    const em = { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
+    const ray = rayAt(lab, em);
+    const from = lab.tree.toRootPos(e.domain, e.pos);
+    const r = Math.hypot(from[0] - lab.probe[0], from[1] - lab.probe[1]);
+    return { emitter: e.id, audit: auditRay(lawsOf(lab.spec), ray.segments, wellIds(lab.spec), ENERGY, r) };
+}
+export const ENERGY = 100;

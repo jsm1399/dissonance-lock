@@ -15,6 +15,7 @@ export function march(tree, from, tEmitLocal, to, opts = {}) {
     const minStep = opts.minStep ?? maxStep / 4096;
     const maxSteps = opts.maxSteps ?? 1_000_000;
     const crossed = [tree.domainAt(a).id];
+    const segments = [];
     let s = 0, h = maxStep, steps = 0;
     while (D - s > 1e-12 * D) {
         if (++steps > maxSteps)
@@ -31,11 +32,16 @@ export function march(tree, from, tEmitLocal, to, opts = {}) {
         t += ds / vm;
         s += ds;
         h = maxStep;
+        const lastSeg = segments[segments.length - 1];
+        if (lastSeg && lastSeg.domain === d0.id)
+            lastSeg.length += ds;
+        else
+            segments.push({ domain: d0.id, length: ds });
         const id = tree.domainAt(at(s)).id;
         if (crossed[crossed.length - 1] !== id)
             crossed.push(id);
     }
-    return { rootTime: t, localTime: tree.toLocalTime(to.domain, t), crossed, steps };
+    return { rootTime: t, localTime: tree.toLocalTime(to.domain, t), crossed, steps, segments };
 }
 /**
  * Distance a wavefront has reached along unit root-direction `dir` by root time tNow,

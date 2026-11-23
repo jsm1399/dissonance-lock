@@ -1,4 +1,6 @@
 import { StrataTree } from "../core/strata/index.js";
+import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
+export const lawsOf = (spec) => spec.laws ?? LAWFUL;
 export const LIMITS = { domains: 24, emitters: 24, changes: 8 };
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
 const pair = (x) => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
@@ -13,6 +15,8 @@ export function validate(spec) {
         errs.push("too many domains");
     if (spec.emitters.length > LIMITS.emitters)
         errs.push("too many emitters");
+    if (spec.laws)
+        errs.push(...validateLaws(spec.laws));
     const ids = new Set(["root"]);
     for (const d of spec.domains) {
         if (!d.id || ids.has(d.id))
@@ -56,21 +60,30 @@ export function validate(spec) {
     }
     return errs;
 }
+/** Build the strata under the world's laws: same data, different physics. */
 export function buildTree(spec) {
+    const laws = lawsOf(spec);
     const t = new StrataTree(2, spec.rootSpeed);
+    const globalTime = laws.time === "global", uniform = laws.medium === "uniform";
     for (const d of spec.domains) {
         const radLocal = d.extent * d.scale;
-        const sm = d.shearMin;
+        const sm = uniform ? null : d.shearMin;
+        // uniform medium: pick the local echo speed that makes the ROOT speed equal rootSpeed everywhere
+        const rplChild = t.get(d.parent).rootPerLocal / d.scale;
         t.add({
-            id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed, rate: d.rate,
+            id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent,
+            echoSpeed: uniform ? spec.rootSpeed / rplChild : d.echoSpeed, rate: globalTime ? 1 : d.rate,
             shear: sm === null ? undefined : (p) => sm + (1 - sm) * Math.min(1, Math.hypot(p[0], p[1]) / radLocal),
         });
     }
-    for (const d of spec.domains)
-        for (const [tm, rt] of d.changes)
-            t.setRate(d.id, tm, rt);
+    if (!globalTime)
+        for (const d of spec.domains)
+            for (const [tm, rt] of d.changes)
+                t.setRate(d.id, tm, rt);
     return t;
 }
+/** Ids of domains that are shear wells (information noise lives there). */
+export const wellIds = (spec) => new Set(spec.domains.filter((d) => d.shearMin !== null).map((d) => d.id));
 export function defaultWorld() {
     return {
         v: 1, rootSpeed: 6,
@@ -92,6 +105,9 @@ export function parseWorld(raw) {
         const j = (typeof raw === "string" ? JSON.parse(raw) : raw);
         if (!j || typeof j !== "object" || !Array.isArray(j.domains) || !Array.isArray(j.emitters))
             return null;
+        const laws = parseLaws(j.laws);
+        if (!laws)
+            return null;
         const spec = {
             v: j.v, rootSpeed: j.rootSpeed,
             domains: j.domains.map((d) => ({
@@ -102,6 +118,7 @@ export function parseWorld(raw) {
             emitters: j.emitters.map((e) => ({
                 id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
             })),
+            ...(isLawful(laws) ? {} : { laws }),
         };
         if (validate(spec).length > 0)
             return null;
@@ -129,7 +146,8 @@ const unb64 = (str) => {
 const r2 = (x) => Math.round(x * 1000) / 1000;
 export function encodeWorld(spec) {
     const rounded = {
-        ...spec, rootSpeed: r2(spec.rootSpeed),
+        v: spec.v, rootSpeed: r2(spec.rootSpeed),
+        ...(spec.laws && !isLawful(spec.laws) ? { laws: cloneLaws(spec.laws) } : {}),
         domains: spec.domains.map((d) => ({
             ...d, origin: [r2(d.origin[0]), r2(d.origin[1])], scale: r2(d.scale), extent: r2(d.extent),
             echoSpeed: r2(d.echoSpeed), rate: r2(d.rate), shearMin: d.shearMin === null ? null : r2(d.shearMin),

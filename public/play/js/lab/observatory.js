@@ -1,12 +1,19 @@
 import { wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
-import { SIZE, SPEEDS, TMAX, addDomain, addEmitter, adjust, computeHeat, driftRate, emissionsUpTo, hitTest, metrics, moveSel, newLab, perceived, removeSel, } from "./lab.js";
-import { defaultWorld } from "./world.js";
+import { LAWFUL } from "../core/laws/index.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, adjust, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, hitTest, metrics, moveSel, newLab, perceived, removeSel, resetLaws, } from "./lab.js";
+import { defaultWorld, lawsOf } from "./world.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
     { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 124;
+const BOT_H = 150;
+const LAW_HOTKEY = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss" };
+const LAW_TITLE = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS" };
+const lawValue = (k, L) => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
+const lawLabel = (k, L) => `${LAW_TITLE[k]}·${lawValue(k, L)}`;
+const lawIsDefault = (k, L) => L[k] === LAWFUL[k];
+const sci = (x) => (x === 0 ? "0" : Math.abs(x) >= 0.01 && Math.abs(x) < 1000 ? x.toPrecision(3) : x.toExponential(1));
 export function createObservatory(hooks) {
     let lab = null;
     let geo = { w: 0, h: 0, x0: 0, y0: 0, s: 1, tbH: 48, botTop: 0, trackX0: 0, trackX1: 0, trackY: 0 };
@@ -19,18 +26,25 @@ export function createObservatory(hooks) {
     const say = (t, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
     function layout(ctx, w, h) {
         const l = lab;
+        const laws = lawsOf(l.spec);
         const items = [
             ...TOOLS,
             { id: "play", label: l.playing ? "PAUSE" : "PLAY" },
             { id: "speed", label: `×${SPEEDS[l.speedIdx]}` },
             { id: "heat", label: l.heat ? "HEAT ✓" : "HEAT" },
             { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
+            ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
+            { id: "lawful", label: "LAWFUL" },
         ];
         btns = [];
         let x = 8, y = 8;
         ctx.font = `700 11px ${FONT}`;
         for (const it of items) {
             const bw = Math.max(46, Math.ceil(ctx.measureText(it.label).width) + 18);
+            if (it.brk && x > 8) {
+                x = 8;
+                y += 34;
+            }
             if (x + bw > w - 8) {
                 x = 8;
                 y += 34;
@@ -78,8 +92,21 @@ export function createObservatory(hooks) {
         }
         else if (id === "menu")
             hooks.onExit();
+        else if (id === "lawful") {
+            resetLaws(l);
+            wf.clear();
+            say("laws restored: lawful");
+        }
+        else if (id.startsWith("law:"))
+            lawStep(id.slice(4));
         else
             l.tool = id;
+    }
+    function lawStep(k) {
+        const l = lab;
+        const next = cycleLaw(l, k);
+        wf.clear();
+        say(`${LAW_TITLE[k]} → ${lawValue(k, next).toLowerCase()}`);
     }
     function place(p) {
         const l = lab;
@@ -268,12 +295,15 @@ export function createObservatory(hooks) {
     }
     function drawToolbar(c, l) {
         for (const b of btns) {
+            const isLaw = b.id.startsWith("law:");
+            const bent = isLaw && !lawIsDefault(b.id.slice(4), lawsOf(l.spec));
             const on = (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
-            c.fillStyle = on ? "rgba(127,219,202,0.22)" : "rgba(255,255,255,0.05)";
+            const col = bent ? "#ffb454" : "#7fdbca";
+            c.fillStyle = bent ? "rgba(255,180,84,0.16)" : on ? "rgba(127,219,202,0.22)" : "rgba(255,255,255,0.05)";
             c.fillRect(b.x, b.y, b.w, b.h);
-            c.strokeStyle = on ? "#7fdbca" : "rgba(255,255,255,0.22)";
+            c.strokeStyle = bent || on ? col : isLaw ? "rgba(160,90,255,0.45)" : "rgba(255,255,255,0.22)";
             c.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
-            text(c, b.label, b.x + b.w / 2, b.y + b.h / 2 + 1, 11, on ? "#7fdbca" : "#cfd8e3", "center", "700");
+            text(c, b.label, b.x + b.w / 2, b.y + b.h / 2 + 1, 11, bent || on ? col : "#cfd8e3", "center", "700");
         }
     }
     function drawBottom(c, l, now) {
@@ -300,15 +330,15 @@ export function createObservatory(hooks) {
             }
         text(c, `t ${l.t.toFixed(1)}s`, trackX1, trackY + 16, 11, "#e8f1ff", "right", "700");
         const m = metrics(l);
-        text(c, "PROBE", 14, botTop + 52, 10, "rgba(180,200,220,0.6)");
-        text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}`, 64, botTop + 52, 12, "rgba(220,232,248,0.95)");
+        text(c, "PROBE", 14, botTop + 46, 10, "rgba(180,200,220,0.6)");
+        text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}`, 64, botTop + 46, 12, "rgba(220,232,248,0.95)");
         const heard = perceived(l).filter((p) => p.arrival >= l.t - 12).slice(-12);
         const byEmit = heard.slice().sort((a, b) => a.emission.launchRoot - b.emission.launchRoot);
         let maxRank = -1;
         heard.forEach((p, i) => {
             const rank = byEmit.indexOf(p) + 1, bad = rank - 1 < maxRank;
             maxRank = Math.max(maxRank, rank - 1);
-            const cx = 24 + i * 30, cy = botTop + 78;
+            const cx = 24 + i * 30, cy = botTop + 92;
             c.beginPath();
             c.arc(cx, cy, 11, 0, Math.PI * 2);
             c.fillStyle = hsl(p.emission.hue, 70, 45, 0.9);
@@ -320,8 +350,18 @@ export function createObservatory(hooks) {
             text(c, String(rank), cx, cy + 1, 10, "#fff", "center", "700");
         });
         if (heard.length === 0)
-            text(c, "probe has heard nothing yet — press PLAY or drag TIME", 14, botTop + 78, 11, "rgba(180,200,220,0.45)");
-        let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · L link";
+            text(c, "probe has heard nothing yet — press PLAY or drag TIME", 14, botTop + 92, 11, "rgba(180,200,220,0.45)");
+        // conservation audit of one emitter's latest pulse along the chord to the probe
+        const au = auditEmitter(l);
+        if (au) {
+            const a = au.audit, pct = (a.relResidual * 100).toFixed(1);
+            const verdict = a.verdict === "conserved" ? "energy ✓ conserved"
+                : a.verdict === "created" ? `energy ✗ CREATED +${pct}%` : `energy ✗ DESTROYED ${pct}%`;
+            const col = a.verdict === "conserved" ? "rgba(127,219,202,0.95)" : "#ff4d6d";
+            text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
+            text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
+        }
+        let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss";
         if (l.sel?.kind === "domain") {
             const d = l.spec.domains.find((q) => q.id === l.sel?.id);
             if (d)
@@ -338,7 +378,7 @@ export function createObservatory(hooks) {
         c.font = `400 10px ${FONT}`;
         const maxW = w - 28;
         const words = info.split(" ");
-        let line = "", ly = botTop + 102, lines = 0;
+        let line = "", ly = botTop + 120, lines = 0;
         for (const wd of words) {
             const test = line ? `${line} ${wd}` : wd;
             if (c.measureText(test).width > maxW && line && lines < 1) {
@@ -399,6 +439,10 @@ export function createObservatory(hooks) {
             const n = Number(k);
             if (n >= 1 && n <= TOOLS.length) {
                 l.tool = TOOLS[n - 1].id;
+                return true;
+            }
+            if (k in LAW_HOTKEY && !shift) {
+                lawStep(LAW_HOTKEY[k]);
                 return true;
             }
             switch (k) {

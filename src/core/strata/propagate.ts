@@ -4,7 +4,9 @@ import { vadd, vsub, vscale, vdist } from "./vec.js";
 
 export interface Site { domain: string; pos: Vec }
 export interface MarchOptions { maxStep?: number; minStep?: number; maxSteps?: number }
-export interface Arrival { rootTime: number; localTime: number; crossed: string[]; steps: number }
+/** A stretch of the chord spent inside one domain (root length units). Consecutive, in march order. */
+export interface Segment { domain: string; length: number }
+export interface Arrival { rootTime: number; localTime: number; crossed: string[]; steps: number; segments: Segment[] }
 
 /**
  * Straight-chord causal march. Adaptive: steps bisect at domain boundaries (error <= minStep),
@@ -26,6 +28,7 @@ export function march(
   const maxSteps = opts.maxSteps ?? 1_000_000;
 
   const crossed: string[] = [tree.domainAt(a).id];
+  const segments: Segment[] = [];
   let s = 0, h = maxStep, steps = 0;
 
   while (D - s > 1e-12 * D) {
@@ -39,10 +42,13 @@ export function march(
     t += ds / vm;
     s += ds;
     h = maxStep;
+    const lastSeg = segments[segments.length - 1];
+    if (lastSeg && lastSeg.domain === d0.id) lastSeg.length += ds;
+    else segments.push({ domain: d0.id, length: ds });
     const id = tree.domainAt(at(s)).id;
     if (crossed[crossed.length - 1] !== id) crossed.push(id);
   }
-  return { rootTime: t, localTime: tree.toLocalTime(to.domain, t), crossed, steps };
+  return { rootTime: t, localTime: tree.toLocalTime(to.domain, t), crossed, steps, segments };
 }
 
 /**

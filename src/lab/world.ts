@@ -1,4 +1,6 @@
 import { StrataTree } from "../core/strata/index.js";
+import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
+import type { Laws } from "../core/laws/index.js";
 
 export interface DomainDef {
   id: string;
@@ -30,7 +32,11 @@ export interface WorldSpec {
   rootSpeed: number;
   domains: DomainDef[];
   emitters: EmitterDef[];
+  /** The rules this world runs under. Absent = LAWFUL (older links). */
+  laws?: Laws;
 }
+
+export const lawsOf = (spec: WorldSpec): Laws => spec.laws ?? LAWFUL;
 
 export const LIMITS = { domains: 24, emitters: 24, changes: 8 };
 
@@ -44,6 +50,7 @@ export function validate(spec: WorldSpec): string[] {
   if (!fin(spec.rootSpeed) || spec.rootSpeed <= 0) errs.push("rootSpeed must be > 0");
   if (spec.domains.length > LIMITS.domains) errs.push("too many domains");
   if (spec.emitters.length > LIMITS.emitters) errs.push("too many emitters");
+  if (spec.laws) errs.push(...validateLaws(spec.laws));
   const ids = new Set<string>(["root"]);
   for (const d of spec.domains) {
     if (!d.id || ids.has(d.id)) errs.push(`bad/duplicate domain id ${d.id}`);
@@ -74,19 +81,28 @@ export function validate(spec: WorldSpec): string[] {
   return errs;
 }
 
+/** Build the strata under the world's laws: same data, different physics. */
 export function buildTree(spec: WorldSpec): StrataTree {
+  const laws = lawsOf(spec);
   const t = new StrataTree(2, spec.rootSpeed);
+  const globalTime = laws.time === "global", uniform = laws.medium === "uniform";
   for (const d of spec.domains) {
     const radLocal = d.extent * d.scale;
-    const sm = d.shearMin;
+    const sm = uniform ? null : d.shearMin;
+    // uniform medium: pick the local echo speed that makes the ROOT speed equal rootSpeed everywhere
+    const rplChild = t.get(d.parent).rootPerLocal / d.scale;
     t.add({
-      id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed, rate: d.rate,
+      id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent,
+      echoSpeed: uniform ? spec.rootSpeed / rplChild : d.echoSpeed, rate: globalTime ? 1 : d.rate,
       shear: sm === null ? undefined : (p) => sm + (1 - sm) * Math.min(1, Math.hypot(p[0], p[1]) / radLocal),
     });
   }
-  for (const d of spec.domains) for (const [tm, rt] of d.changes) t.setRate(d.id, tm, rt);
+  if (!globalTime) for (const d of spec.domains) for (const [tm, rt] of d.changes) t.setRate(d.id, tm, rt);
   return t;
 }
+
+/** Ids of domains that are shear wells (information noise lives there). */
+export const wellIds = (spec: WorldSpec): Set<string> => new Set(spec.domains.filter((d) => d.shearMin !== null).map((d) => d.id));
 
 export function defaultWorld(): WorldSpec {
   return {
@@ -109,6 +125,8 @@ export function parseWorld(raw: unknown): WorldSpec | null {
   try {
     const j = (typeof raw === "string" ? JSON.parse(raw) : raw) as Partial<WorldSpec> | null;
     if (!j || typeof j !== "object" || !Array.isArray(j.domains) || !Array.isArray(j.emitters)) return null;
+    const laws = parseLaws(j.laws);
+    if (!laws) return null;
     const spec: WorldSpec = {
       v: j.v as 1, rootSpeed: j.rootSpeed as number,
       domains: j.domains.map((d) => ({
@@ -119,6 +137,7 @@ export function parseWorld(raw: unknown): WorldSpec | null {
       emitters: j.emitters.map((e) => ({
         id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
       })),
+      ...(isLawful(laws) ? {} : { laws }),
     };
     if (validate(spec).length > 0) return null;
     buildTree(spec);
@@ -145,7 +164,8 @@ const r2 = (x: number) => Math.round(x * 1000) / 1000;
 
 export function encodeWorld(spec: WorldSpec): string {
   const rounded: WorldSpec = {
-    ...spec, rootSpeed: r2(spec.rootSpeed),
+    v: spec.v, rootSpeed: r2(spec.rootSpeed),
+    ...(spec.laws && !isLawful(spec.laws) ? { laws: cloneLaws(spec.laws) } : {}),
     domains: spec.domains.map((d) => ({
       ...d, origin: [r2(d.origin[0]), r2(d.origin[1])], scale: r2(d.scale), extent: r2(d.extent),
       echoSpeed: r2(d.echoSpeed), rate: r2(d.rate), shearMin: d.shearMin === null ? null : r2(d.shearMin),
