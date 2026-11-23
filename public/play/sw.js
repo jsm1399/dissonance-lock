@@ -1,4 +1,4 @@
-const CACHE = "dissonance-lock-v1.1";
+const CACHE = "dissonance-lock-v1.2";
 const ASSETS = [
   "./",
   "./icon-192.png",
@@ -27,6 +27,7 @@ const ASSETS = [
   "./js/game/tutorial.js",
   "./js/lab/lab.js",
   "./js/lab/observatory.js",
+  "./js/lab/spacetime.js",
   "./js/lab/world.js",
   "./manifest.webmanifest"
 ];

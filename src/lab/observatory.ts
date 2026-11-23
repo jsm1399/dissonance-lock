@@ -8,6 +8,7 @@ import {
   fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws,
 } from "./lab.js";
 import type { LawKey, Lab, Sel, Tool } from "./lab.js";
+import { spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import type { WorldSpec } from "./world.js";
 
@@ -20,7 +21,7 @@ export interface Hooks {
 }
 
 interface Btn { id: string; label: string; x: number; y: number; w: number; h: number }
-interface Geo { w: number; h: number; x0: number; y0: number; s: number; tbH: number; botTop: number; trackX0: number; trackX1: number; trackY: number }
+interface Geo { st: { x: number; y: number; w: number; h: number }; w: number; h: number; x0: number; y0: number; s: number; tbH: number; botTop: number; trackX0: number; trackX1: number; trackY: number }
 
 const TOOLS: { id: Tool; label: string }[] = [
   { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
@@ -45,16 +46,18 @@ export interface Observatory {
   pointerMove(x: number, y: number): void;
   pointerUp(): void;
   lab(): Lab | null;
+  view(): "map" | "st";
 }
 
 export function createObservatory(hooks: Hooks): Observatory {
   let lab: Lab | null = null;
-  let geo: Geo = { w: 0, h: 0, x0: 0, y0: 0, s: 1, tbH: 48, botTop: 0, trackX0: 0, trackX1: 0, trackY: 0 };
+  let geo: Geo = { st: { x: 0, y: 0, w: 0, h: 0 }, w: 0, h: 0, x0: 0, y0: 0, s: 1, tbH: 48, botTop: 0, trackX0: 0, trackX1: 0, trackY: 0 };
   let btns: Btn[] = [];
   let drag: Sel | null = null;
   let scrubbing = false;
   let toast: { text: string; until: number } | null = null;
   let lastRev = -1;
+  let view: "map" | "st" = "map";
   const wf = new Map<string, { t: number; poly: Vec[] }>();
 
   const say = (t: string, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
@@ -68,6 +71,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       { id: "speed", label: `×${SPEEDS[l.speedIdx]}` },
       { id: "heat", label: l.heat ? "HEAT ✓" : "HEAT" },
       { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
+      { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
       ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
       { id: "lawful", label: "LAWFUL" },
     ];
@@ -83,9 +87,15 @@ export function createObservatory(hooks: Hooks): Observatory {
     }
     const tbH = y + 36;
     const avail = Math.max(120, Math.min(w - 16, h - tbH - BOT_H - 8));
-    const s = avail / SIZE;
+    const st = { x: 8, y: tbH + 4, w: w - 16, h: Math.max(120, h - tbH - BOT_H - 8) };
+    let s = avail / SIZE, x0 = (w - s * SIZE) / 2, y0 = tbH + 4;
+    if (view === "st") {
+      // the map shrinks to a fully interactive inset in the top-left of the diagram
+      const side = Math.max(110, Math.min(st.w * 0.28, st.h * 0.26));
+      s = side / SIZE; x0 = st.x + 46; y0 = st.y + 12;
+    }
     geo = {
-      w, h, s, x0: (w - s * SIZE) / 2, y0: tbH + 4, tbH, botTop: h - BOT_H,
+      st, w, h, s, x0, y0, tbH, botTop: h - BOT_H,
       trackX0: 64, trackX1: w - 20, trackY: h - BOT_H + 20,
     };
   }
@@ -111,7 +121,8 @@ export function createObservatory(hooks: Hooks): Observatory {
       lab.tool = keepTool;
       wf.clear();
       say("world reset");
-    } else if (id === "menu") hooks.onExit();
+    } else if (id === "view") { view = view === "map" ? "st" : "map"; wf.clear(); say(view === "st" ? "spacetime: probe frame" : "map view"); }
+    else if (id === "menu") hooks.onExit();
     else if (id === "lawful") { resetLaws(l); wf.clear(); say("laws restored: lawful"); }
     else if (id.startsWith("law:")) lawStep(id.slice(4) as LawKey);
     else l.tool = id as Tool;
@@ -253,6 +264,82 @@ export function createObservatory(hooks: Hooks): Observatory {
     c.strokeRect(x0 + 0.5, y0 + 0.5, SIZE * s - 1, SIZE * s - 1);
   }
 
+  // ---------- spacetime: the probe's causal diagram ----------
+  const SPAN = 60;
+  function drawSpacetime(c: CanvasRenderingContext2D, l: Lab): void {
+    const R = geo.st;
+    const st = spacetime(l);
+    const px = R.x + 40, pw = R.w - 52, py = R.y + 8, ph = R.h - 42;
+    const tmin = l.t - 0.72 * SPAN;
+    const X = (d: number) => px + (1 - d / st.dmax) * pw;
+    const T = (t: number) => py + ph - ((t - tmin) / SPAN) * ph;
+    const clipT = (t: number) => Math.min(py + ph, Math.max(py, T(t)));
+    c.save();
+    c.fillStyle = "#070a12"; c.fillRect(R.x, R.y, R.w, R.h);
+    c.beginPath(); c.rect(R.x, R.y, R.w, R.h); c.clip();
+    c.lineWidth = 1;
+    for (let t = Math.ceil(tmin / 10) * 10; t < tmin + SPAN; t += 10) {
+      const y = T(t);
+      c.strokeStyle = "rgba(255,255,255,0.05)";
+      c.beginPath(); c.moveTo(px, y); c.lineTo(px + pw, y); c.stroke();
+      text(c, `${t}s`, px - 6, y, 10, "rgba(180,200,220,0.5)", "right");
+    }
+    // emitter worldlines; ticks are the emitter's OWN clock beats seen in root time
+    for (const e of l.spec.emitters) {
+      const p = l.tree.toRootPos(e.domain, e.pos);
+      const d = Math.hypot(p[0] - l.probe[0], p[1] - l.probe[1]);
+      const x = X(d);
+      c.strokeStyle = hsl(e.hue, 60, 50, 0.22);
+      c.beginPath(); c.moveTo(x, py); c.lineTo(x, py + ph); c.stroke();
+      text(c, e.id, x, py + ph + 12, 10, hsl(e.hue, 80, 75), "center", "700");
+    }
+    for (const ln of st.lines) {
+      c.fillStyle = hsl(ln.hue, 80, 65, 0.9);
+      c.fillRect(X(ln.dist) - 3, clipT(ln.launch) - 0.5, 6, 1.5);
+    }
+    // signals: dim whole path, bright the part already travelled
+    for (const ln of st.lines) {
+      const x0 = X(ln.dist), y0 = T(ln.launch), x1 = X(0), y1 = T(ln.arrival);
+      c.strokeStyle = hsl(ln.hue, 70, 55, 0.22); c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+      const f = ln.arrival > ln.launch ? Math.min(1, Math.max(0, (l.t - ln.launch) / (ln.arrival - ln.launch))) : 1;
+      if (f > 0) {
+        c.strokeStyle = hsl(ln.hue, 85, 65, 0.9); c.lineWidth = 1.6;
+        c.beginPath(); c.moveTo(x0, y0); c.lineTo(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f); c.stroke();
+      }
+      if (ln.heard) {
+        c.beginPath(); c.arc(x1, y1, 4, 0, Math.PI * 2); c.fillStyle = hsl(ln.hue, 80, 60); c.fill();
+        if (ln.inverted) { c.lineWidth = 2; c.strokeStyle = "#ff4d6d"; c.stroke(); }
+      }
+    }
+    c.lineWidth = 1;
+    // lawful light line (uniform medium) and the probe's actual causal horizon
+    const v = l.spec.rootSpeed;
+    c.setLineDash([5, 5]); c.strokeStyle = "rgba(255,255,255,0.4)";
+    c.beginPath(); c.moveTo(X(0), T(l.t)); c.lineTo(X(st.dmax), T(l.t - st.dmax / v)); c.stroke();
+    c.setLineDash([]);
+    if (st.horizon.length > 0) {
+      c.strokeStyle = "#ffffff"; c.lineWidth = 2;
+      c.beginPath();
+      st.horizon.forEach((h, i) => (i === 0 ? c.moveTo(X(h.dist), T(h.launch)) : c.lineTo(X(h.dist), T(h.launch))));
+      c.stroke(); c.lineWidth = 1;
+      for (const h of st.horizon) { c.beginPath(); c.arc(X(h.dist), T(h.launch), 3, 0, Math.PI * 2); c.fillStyle = "#fff"; c.fill(); }
+    }
+    c.strokeStyle = "rgba(127,219,202,0.85)";
+    c.beginPath(); c.moveTo(px, T(l.t)); c.lineTo(px + pw, T(l.t)); c.stroke();
+    c.strokeStyle = "rgba(255,255,255,0.7)";
+    c.beginPath(); c.moveTo(X(0), py); c.lineTo(X(0), py + ph); c.stroke();
+    text(c, "NOW", px + pw - 4, T(l.t) - 8, 10, "#7fdbca", "right", "700");
+    text(c, "PROBE", X(0) - 4, py + 8, 10, "#fff", "right", "700");
+    text(c, `SPACETIME · inversions ${st.inversions}`, px + pw - 4, py + 22, 11, st.inversions > 0 ? "#ff4d6d" : "rgba(127,219,202,0.95)", "right", "700");
+    const cap = R.w < 640 ? "dashed: lawful light · white: causal horizon · red: out of order"
+      : "distance from probe ← · time ↑ · dashed: lawful light line · white: causal horizon · red: heard out of order";
+    text(c, cap, px + pw, py + ph + 28, 9, "rgba(180,200,220,0.55)", "right");
+    c.restore();
+    c.strokeStyle = "rgba(255,255,255,0.25)";
+    c.strokeRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1);
+  }
+
   function drawToolbar(c: CanvasRenderingContext2D, l: Lab): void {
     for (const b of btns) {
       const isLaw = b.id.startsWith("law:");
@@ -312,7 +399,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
       text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
     }
-    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
+    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-6 tools · Space play · ←/→ time · H heat · V spacetime · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
     if (l.sel?.kind === "domain") {
       const d = l.spec.domains.find((q) => q.id === l.sel?.id);
       if (d) info = `${d.id} · ${d.shearMin !== null ? "shear well" : "clock domain"} · size ${d.extent.toFixed(1)} · rate ${d.rate.toFixed(2)} · drifts ${d.changes.length}   [ ] size · - = rate · , . drift at t · Del`;
@@ -345,9 +432,11 @@ export function createObservatory(hooks: Hooks): Observatory {
   return {
     isOpen: () => lab !== null,
     lab: () => lab,
+    view: () => view,
     open(spec) {
       lab = newLab(spec ?? defaultWorld());
       lastRev = -1;
+      view = "map";
       drag = null; scrubbing = false; wf.clear();
     },
     close() { lab = null; drag = null; scrubbing = false; wf.clear(); },
@@ -361,6 +450,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       pumpFields(lab);
       layout(ctx, w, h);
       ctx.fillStyle = "#05070b"; ctx.fillRect(0, 0, w, h);
+      if (view === "st") drawSpacetime(ctx, lab);
       drawWorld(ctx, lab, now);
       drawToolbar(ctx, lab);
       drawBottom(ctx, lab, now);
@@ -375,6 +465,7 @@ export function createObservatory(hooks: Hooks): Observatory {
         case " ": activate("play"); return true;
         case "arrowleft": l.t = Math.max(0, l.t - (shift ? 5 : 1)); return true;
         case "arrowright": l.t = Math.min(TMAX, l.t + (shift ? 5 : 1)); return true;
+        case "v": activate("view"); return true;
         case "h": activate("heat"); return true;
         case "l": activate("link"); return true;
         case "escape": hooks.onExit(); return true;
