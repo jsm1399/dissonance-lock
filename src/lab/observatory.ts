@@ -8,7 +8,7 @@ import {
   fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws,
 } from "./lab.js";
 import type { LawKey, Lab, Sel, Tool } from "./lab.js";
-import { spacetime } from "./spacetime.js";
+import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import type { WorldSpec } from "./world.js";
 
@@ -269,6 +269,7 @@ export function createObservatory(hooks: Hooks): Observatory {
   function drawSpacetime(c: CanvasRenderingContext2D, l: Lab): void {
     const R = geo.st;
     const st = spacetime(l);
+    const cone = l.sel?.kind === "emitter" ? causalCone(l, st, l.sel.id, l.t - 0.3 * SPAN) : null;
     const px = R.x + 40, pw = R.w - 52, py = R.y + 8, ph = R.h - 42;
     const tmin = l.t - 0.72 * SPAN;
     const X = (d: number) => px + (1 - d / st.dmax) * pw;
@@ -298,7 +299,21 @@ export function createObservatory(hooks: Hooks): Observatory {
       c.fillRect(X(ln.dist) - 3, clipT(ln.launch) - 0.5, 6, 1.5);
     }
     // signals: dim whole path, bright the part already travelled
+    const v0 = l.spec.rootSpeed;
+    if (cone) {
+      // ideal light cone of the selected pulse (the true classification below uses the real medium)
+      const o = cone.origin, ox = X(o.dist), oy = T(o.launch);
+      const reachD = Math.max(0, (tmin + SPAN - o.launch)) * v0, reachP = Math.max(0, o.launch - tmin) * v0;
+      c.setLineDash([3, 4]); c.lineWidth = 1;
+      c.strokeStyle = "rgba(127,219,202,0.5)";
+      for (const sgn of [-1, 1]) { c.beginPath(); c.moveTo(ox, oy); c.lineTo(X(o.dist + sgn * reachD), T(tmin + SPAN)); c.stroke(); }
+      c.strokeStyle = "rgba(255,180,84,0.5)";
+      for (const sgn of [-1, 1]) { c.beginPath(); c.moveTo(ox, oy); c.lineTo(X(o.dist + sgn * reachP), T(tmin)); c.stroke(); }
+      c.setLineDash([]);
+    }
     for (const ln of st.lines) {
+      const rel = cone?.rel.get(ln);
+      c.globalAlpha = rel === "independent" ? 0.3 : 1;
       const x0 = X(ln.dist), y0 = T(ln.launch), x1 = X(0), y1 = T(ln.arrival);
       c.strokeStyle = hsl(ln.hue, 70, 55, 0.22); c.lineWidth = 1;
       c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
@@ -311,6 +326,19 @@ export function createObservatory(hooks: Hooks): Observatory {
         c.beginPath(); c.arc(x1, y1, 4, 0, Math.PI * 2); c.fillStyle = hsl(ln.hue, 80, 60); c.fill();
         if (ln.inverted) { c.lineWidth = 2; c.strokeStyle = "#ff4d6d"; c.stroke(); }
       }
+      c.globalAlpha = 1;
+      if (rel === "future" || rel === "past") {
+        const mx = x0, my = clipT(ln.launch), up = rel === "future";
+        c.fillStyle = up ? "#7fdbca" : "#ffb454";
+        c.beginPath();
+        c.moveTo(mx, my + (up ? -9 : 9)); c.lineTo(mx - 5, my + (up ? -1 : 1)); c.lineTo(mx + 5, my + (up ? -1 : 1)); c.closePath(); c.fill();
+      }
+    }
+    if (cone) {
+      const o = cone.origin;
+      c.strokeStyle = "#fff"; c.lineWidth = 3;
+      c.beginPath(); c.moveTo(X(o.dist), T(o.launch)); c.lineTo(X(0), T(o.arrival)); c.stroke();
+      c.beginPath(); c.arc(X(o.dist), T(o.launch), 5, 0, Math.PI * 2); c.fillStyle = "#fff"; c.fill();
     }
     c.lineWidth = 1;
     // lawful light line (uniform medium) and the probe's actual causal horizon
@@ -332,6 +360,10 @@ export function createObservatory(hooks: Hooks): Observatory {
     text(c, "NOW", px + pw - 4, T(l.t) - 8, 10, "#7fdbca", "right", "700");
     text(c, "PROBE", X(0) - 4, py + 8, 10, "#fff", "right", "700");
     text(c, `SPACETIME · inversions ${st.inversions}`, px + pw - 4, py + 22, 11, st.inversions > 0 ? "#ff4d6d" : "rgba(127,219,202,0.95)", "right", "700");
+    if (cone) {
+      text(c, `${cone.origin.emitter} pulse ${cone.origin.k} · ▲ future ${cone.future} · ▼ past ${cone.past} · independent ${cone.independent}`,
+        px + pw - 4, py + 36, 11, "#ffffff", "right", "700");
+    } else text(c, "select an emitter in the inset → its causal cone", px + pw - 4, py + 36, 10, "rgba(180,200,220,0.6)", "right");
     const cap = R.w < 640 ? "dashed: lawful light · white: causal horizon · red: out of order"
       : "distance from probe ← · time ↑ · dashed: lawful light line · white: causal horizon · red: heard out of order";
     text(c, cap, px + pw, py + ph + 28, 9, "rgba(180,200,220,0.55)", "right");

@@ -1,3 +1,5 @@
+import { CausalLedger } from "../core/strata/index.js";
+import type { CausalEvent, Vec } from "../core/strata/index.js";
 import { arrivalAt, emissionsUpTo } from "./lab.js";
 import type { Lab } from "./lab.js";
 
@@ -9,6 +11,10 @@ export interface Worldline {
   emitter: string;
   hue: number;
   k: number;
+  /** emitter site: domain + position in that domain's coordinates, and launch in its own clock */
+  domain: string;
+  pos: Vec;
+  launchLocal: number;
   /** root distance emitter -> probe */
   dist: number;
   launch: number;
@@ -47,7 +53,8 @@ export function spacetime(lab: Lab, per = PER, margin = MARGIN, window = WINDOW)
   const lines: Worldline[] = emissionsUpTo(lab, lab.t, per).map((em) => {
     const arrival = arrivalAt(lab, em);
     return {
-      emitter: em.emitter, hue: em.hue, k: em.k, dist: dist.get(em.emitter) ?? 0,
+      emitter: em.emitter, hue: em.hue, k: em.k, domain: em.domain, pos: em.pos, launchLocal: em.launchLocal,
+      dist: dist.get(em.emitter) ?? 0,
       launch: em.launchRoot, arrival, heard: arrival <= lab.t, inverted: false,
     };
   });
@@ -73,3 +80,53 @@ export function spacetime(lab: Lab, per = PER, margin = MARGIN, window = WINDOW)
     .sort((a, b) => a.dist - b.dist);
   return { lines, horizon, inversions, dmax: dmax * 1.06 };
 }
+
+// ---------- causal cone of one emission (uses the core CausalLedger) ----------
+export type Rel = "past" | "future" | "independent";
+
+export interface Cone {
+  origin: Worldline;
+  rel: Map<Worldline, Rel>;
+  past: number;
+  future: number;
+  independent: number;
+}
+
+const ledgers = new WeakMap<Lab, { rev: number; ledger: CausalLedger<string>; ev: Map<string, CausalEvent<string>> }>();
+
+function eventOf(lab: Lab, w: Worldline): CausalEvent<string> {
+  let c = ledgers.get(lab);
+  if (!c || c.rev !== lab.rev) {
+    c = { rev: lab.rev, ledger: new CausalLedger<string>(lab.tree, { maxStep: 1 }), ev: new Map() };
+    ledgers.set(lab, c);
+  }
+  const key = `${w.emitter}|${w.k}`;
+  let e = c.ev.get(key);
+  if (!e) { e = c.ledger.emit({ domain: w.domain, pos: w.pos }, w.launchLocal, key); c.ev.set(key, e); }
+  return e;
+}
+
+/**
+ * Can the pulse of `emitterId` (newest, or the one launched nearest `aroundLaunch`) have influenced / been influenced by every other pulse in view?
+ * future = its signal reaches that pulse's emitter before that pulse is launched; past = the reverse;
+ * independent = neither (spacelike). Uses straight chords, i.e. an upper bound on arrival (see `march`).
+ */
+export function causalCone(lab: Lab, st: Spacetime, emitterId: string, aroundLaunch?: number): Cone | null {
+  let origin: Worldline | null = null;
+  const score = (l: Worldline) => (aroundLaunch === undefined ? l.k : -Math.abs(l.launch - aroundLaunch));
+  for (const l of st.lines) if (l.emitter === emitterId && (!origin || score(l) > score(origin))) origin = l;
+  if (!origin) return null;
+  const a = eventOf(lab, origin);
+  const rel = new Map<Worldline, Rel>();
+  let past = 0, future = 0, independent = 0;
+  for (const l of st.lines) {
+    if (l === origin) continue;
+    const x = ledgerOf(lab).relation(a, eventOf(lab, l));
+    const v: Rel = x === "before" ? "future" : x === "after" ? "past" : x === "same" ? "future" : "independent";
+    rel.set(l, v);
+    if (v === "past") past++; else if (v === "future") future++; else independent++;
+  }
+  return { origin, rel, past, future, independent };
+}
+
+const ledgerOf = (lab: Lab): CausalLedger<string> => (ledgers.get(lab) as { ledger: CausalLedger<string> }).ledger;

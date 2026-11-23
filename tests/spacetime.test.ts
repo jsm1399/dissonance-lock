@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { countInversions } from "../src/core/strata/index.js";
 import { newLab, metrics, cycleLaw } from "../src/lab/lab.js";
-import { spacetime, MARGIN } from "../src/lab/spacetime.js";
+import { spacetime, causalCone, MARGIN } from "../src/lab/spacetime.js";
 import { defaultWorld } from "../src/lab/world.js";
 import type { WorldSpec } from "../src/lab/world.js";
 
@@ -83,4 +83,63 @@ test("spacetime: laws change the diagram — global time + uniform medium collap
   const after = spacetime(lab);
   assert.notDeepEqual(before, after.lines.map((l) => Math.round((l.arrival - l.launch) * 100)));
   for (const l of after.lines) assert.ok(Math.abs(l.arrival - l.launch - l.dist / lab.spec.rootSpeed) < 0.05);
+});
+
+test("causal cone: uniform medium — future/past/independent follow |dt| vs distance/speed exactly", () => {
+  const lab = newLab(uniform());
+  lab.probe = [50, 50];
+  lab.t = 60;
+  const st = spacetime(lab);
+  const cone = causalCone(lab, st, "e1");
+  assert.ok(cone);
+  const gap = 60 / 6; // e1 and e2 are 60 apart
+  let seen = { past: 0, future: 0, independent: 0 };
+  for (const [l, rel] of cone.rel) {
+    const dt = l.launch - cone.origin.launch;
+    const same = l.emitter === "e1";
+    const want = same ? (dt > 0 ? "future" : "past")
+      : dt >= gap - 1e-6 ? "future" : dt <= -gap + 1e-6 ? "past" : "independent";
+    if (!same && Math.abs(Math.abs(dt) - gap) < 0.05) continue; // on the light line itself
+    assert.equal(rel, want, `${l.emitter}#${l.k} dt=${dt.toFixed(2)}`);
+    seen[rel]++;
+  }
+  assert.ok(seen.past > 0 && seen.future >= 0 && seen.independent > 0, JSON.stringify(seen));
+  assert.equal(cone.past + cone.future + cone.independent, st.lines.length - 1);
+});
+
+test("causal cone: relations are antisymmetric between two emitters' newest pulses", () => {
+  for (const spec of [uniform(), defaultWorld()]) {
+    const lab = newLab(spec);
+    lab.t = 80;
+    const st = spacetime(lab);
+    const ids = lab.spec.emitters.map((e) => e.id);
+    for (const a of ids) for (const b of ids) {
+      if (a === b) continue;
+      const ca = causalCone(lab, st, a)!, cb = causalCone(lab, st, b)!;
+      const ra = ca.rel.get(cb.origin), rb = cb.rel.get(ca.origin);
+      if (ra === "future") assert.equal(rb, "past", `${a}->${b}`);
+      if (ra === "past") assert.equal(rb, "future", `${a}->${b}`);
+      if (ra === "independent") assert.equal(rb, "independent", `${a}->${b}`);
+    }
+  }
+});
+
+test("causal cone: same-emitter pulses are ordered; unknown emitter gives null", () => {
+  const lab = newLab(defaultWorld());
+  lab.t = 80;
+  const st = spacetime(lab);
+  assert.equal(causalCone(lab, st, "nope"), null);
+  const c = causalCone(lab, st, "e2")!;
+  for (const [l, rel] of c.rel) if (l.emitter === "e2") assert.equal(rel, l.k > c.origin.k ? "future" : "past");
+});
+
+test("causal cone: aroundLaunch picks the pulse nearest that time and finds both a past and a future", () => {
+  const lab = newLab(uniform());
+  lab.probe = [50, 50];
+  lab.t = 60;
+  const st = spacetime(lab);
+  const c = causalCone(lab, st, "e1", 40)!;
+  const best = Math.min(...st.lines.filter((l) => l.emitter === "e1").map((l) => Math.abs(l.launch - 40)));
+  assert.ok(Math.abs(c.origin.launch - 40) <= best + 1e-9);
+  assert.ok(c.past > 0 && c.future > 0 && c.independent > 0);
 });
