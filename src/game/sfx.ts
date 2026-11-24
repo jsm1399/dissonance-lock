@@ -30,7 +30,36 @@ function tone(freq: number, dur: number, type: OscillatorType, vol: number, slid
   o.stop(t + dur + 0.02);
 }
 
+let drone: { a: OscillatorNode; b: OscillatorNode; g: GainNode } | null = null;
+
+function stopDrone(): void {
+  if (!drone) return;
+  const d = drone;
+  drone = null;
+  try { d.g.gain.setTargetAtTime(0.0001, d.g.context.currentTime, 0.15); d.a.stop(d.g.context.currentTime + 0.8); d.b.stop(d.g.context.currentTime + 0.8); } catch { /* already stopped */ }
+}
+
 export const sfx = {
+  /** Ambient bed: two close tones whose beating IS the dissonance. level 0..1, or < 0 for silence. */
+  drone(level: number): void {
+    if (level < 0 || muted) { stopDrone(); return; }
+    const a = ac();
+    if (!a) return;
+    if (!drone) {
+      const g = a.createGain(), lp = a.createBiquadFilter();
+      lp.type = "lowpass"; lp.frequency.value = 700;
+      g.gain.value = 0.0001;
+      const oa = a.createOscillator(), ob = a.createOscillator();
+      oa.type = "triangle"; ob.type = "triangle";
+      oa.frequency.value = 55; ob.frequency.value = 55.7;
+      oa.connect(g); ob.connect(g); g.connect(lp).connect(a.destination);
+      oa.start(); ob.start();
+      drone = { a: oa, b: ob, g };
+    }
+    const t = a.currentTime, d = Math.min(1, Math.max(0, level));
+    drone.b.frequency.setTargetAtTime(55 * (1.012 + 0.05 * d), t, 0.2);
+    drone.g.gain.setTargetAtTime(0.02 + 0.05 * d, t, 0.3);
+  },
   get muted(): boolean { return muted; },
   toggle(): boolean { muted = !muted; return muted; },
   unlock(): void { ac(); },

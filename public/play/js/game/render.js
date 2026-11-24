@@ -322,6 +322,101 @@ function drawHint(c, ui, v) {
     if (line)
         text(c, line, x + 12, ly, 11, "rgba(220,230,245,0.9)");
 }
+function wrapLines(c, s, maxW, size) {
+    c.font = `400 ${size}px ${FONT}`;
+    const out = [];
+    let line = "";
+    for (const wd of s.split(" ")) {
+        const t = line ? `${line} ${wd}` : wd;
+        if (c.measureText(t).width > maxW && line) {
+            out.push(line);
+            line = wd;
+        }
+        else
+            line = t;
+    }
+    if (line)
+        out.push(line);
+    return out;
+}
+/** Incoming transmission shown while a sector loads: pure framing, dismissed by moving. */
+function drawBrief(c, ui, v, now) {
+    const b = ui.brief;
+    if (!b)
+        return;
+    const fade = Math.min(1, (now - b.since) / 400, (b.until - now) / 600);
+    if (fade <= 0)
+        return;
+    const w = Math.min(WORLD * v.s - 16, 560), x = v.w / 2 - w / 2, y = v.y0 + 8;
+    const body = b.lines.flatMap((l) => wrapLines(c, l, w - 24, 11));
+    const h = 52 + body.length * 15;
+    c.save();
+    c.globalAlpha = fade;
+    c.fillStyle = "rgba(3,5,9,0.88)";
+    c.fillRect(x, y, w, h);
+    c.strokeStyle = "rgba(255,180,84,0.75)";
+    c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    c.fillStyle = "#ffb454";
+    c.fillRect(x, y, 3, h);
+    text(c, "INCOMING TRANSMISSION · LATTICE OPS", x + 14, y + 13, 9, "rgba(255,180,84,0.8)");
+    text(c, b.title, x + 14, y + 32, 14, "#ffe3b8", "left", "700");
+    body.forEach((l, i) => text(c, l, x + 14, y + 52 + i * 15, 11, "rgba(225,232,245,0.92)"));
+    c.restore();
+}
+// ---- atmosphere: title backdrop, vignette, scanlines (purely cosmetic) ----
+let scan = null;
+let vig = null;
+function drawFX(c, v) {
+    if (!vig || vig.w !== v.w || vig.h !== v.h) {
+        const g = c.createRadialGradient(v.w / 2, v.h / 2, Math.min(v.w, v.h) * 0.45, v.w / 2, v.h / 2, Math.hypot(v.w, v.h) * 0.62);
+        g.addColorStop(0, "rgba(0,0,0,0)");
+        g.addColorStop(1, "rgba(0,0,0,0.55)");
+        vig = { w: v.w, h: v.h, g };
+    }
+    c.fillStyle = vig.g;
+    c.fillRect(0, 0, v.w, v.h);
+    if (!scan && typeof document !== "undefined") {
+        const p = document.createElement("canvas");
+        p.width = 1;
+        p.height = 4;
+        const q = p.getContext("2d");
+        if (q) {
+            q.fillStyle = "rgba(120,200,255,0.045)";
+            q.fillRect(0, 0, 1, 1);
+            scan = c.createPattern(p, "repeat");
+        }
+    }
+    if (scan) {
+        c.fillStyle = scan;
+        c.fillRect(0, 0, v.w, v.h);
+    }
+}
+const GHOSTS = [[0.16, 0.22, 7.3], [0.82, 0.18, 9.1], [0.5, 0.62, 11.7], [0.12, 0.8, 8.3], [0.9, 0.74, 6.1], [0.34, 0.4, 13.1]];
+/** Slow echoes drifting across the title: a lattice at rest. */
+function drawBackdrop(c, v, now) {
+    const t = now / 1000, R = Math.hypot(v.w, v.h) * 0.45;
+    c.lineWidth = 1;
+    GHOSTS.forEach(([fx, fy, per], i) => {
+        const hue = 190 + i * 37;
+        const cx = fx * v.w, cy = fy * v.h;
+        for (let k = 0; k < 3; k++) {
+            const ph = (REDUCED ? 0.3 + k * 0.3 : ((t / per) + k / 3 + i * 0.17) % 1);
+            c.beginPath();
+            c.arc(cx, cy, ph * R, 0, Math.PI * 2);
+            c.strokeStyle = hsl(hue, 70, 60, 0.55 * (1 - ph));
+            c.stroke();
+        }
+        c.beginPath();
+        c.arc(cx, cy, 2.2, 0, Math.PI * 2);
+        c.fillStyle = hsl(hue, 80, 65, 0.7);
+        c.fill();
+    });
+    if (v.w >= 700) {
+        const drift = (Math.sin(t * 0.37) * 0.012 + Math.sin(t * 0.11) * 0.02).toFixed(3);
+        text(c, "NODE 7F · LATTICE LINK STABLE", 16, 20, 10, "rgba(127,219,202,0.8)");
+        text(c, `CLOCK DRIFT ${Number(drift) >= 0 ? "+" : ""}${drift} ms · ${fmtTime(t)} UPTIME`, 16, 35, 10, "rgba(180,200,220,0.65)");
+    }
+}
 function drawToast(c, ui, v, now) {
     const t = ui.toast;
     if (!t || now > t.until)
@@ -337,8 +432,9 @@ function dim(c, v, a) {
     c.fillStyle = `rgba(3,5,9,${a})`;
     c.fillRect(0, 0, v.w, v.h);
 }
-function drawTitle(c, ui, v) {
-    dim(c, v, 0.9);
+function drawTitle(c, ui, v, now) {
+    drawBackdrop(c, v, now);
+    dim(c, v, 0.7);
     const cx = v.w / 2;
     let y = Math.max(36, v.h * 0.07);
     text(c, "DISSONANCE-LOCK", cx, y, Math.min(40, v.w / 11), "#e8f1ff", "center", "700");
@@ -410,8 +506,10 @@ export function draw(ctx, g, ui, v, now) {
         drawWorld(ctx, g, ui, v, now);
         drawHud(ctx, g, v, now);
         drawStrip(ctx, g, ui, v);
-        if (ui.screen === "play")
+        if (ui.screen === "play") {
             drawHint(ctx, ui, v);
+            drawBrief(ctx, ui, v, now);
+        }
     }
     if (ui.screen === "title" || !g) {
         if (!g) {
@@ -419,7 +517,7 @@ export function draw(ctx, g, ui, v, now) {
             ctx.strokeStyle = "rgba(255,255,255,0.08)";
             ctx.strokeRect(v.x0 + 0.5, v.y0 + 0.5, WORLD * v.s - 1, WORLD * v.s - 1);
         }
-        drawTitle(ctx, ui, v);
+        drawTitle(ctx, ui, v, now);
     }
     else if (ui.screen === "pause") {
         dim(ctx, v, 0.65);
@@ -436,5 +534,6 @@ export function draw(ctx, g, ui, v, now) {
     else if (ui.screen === "end")
         drawEnd(ctx, ui, v);
     drawToast(ctx, ui, v, now);
+    drawFX(ctx, v);
     text(ctx, ui.muted ? "muted" : "", v.w - 10, v.h - v.stripH - 8, 10, "rgba(180,200,220,0.5)", "right");
 }

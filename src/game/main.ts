@@ -10,6 +10,7 @@ import { readPad } from "./pad.js";
 import { draw, layout, resetRender } from "./render.js";
 import type { MenuItem, Rect, Ui, View } from "./render.js";
 import { sfx } from "./sfx.js";
+import { BRIEFS, driftBrief } from "./lore.js";
 import { createObservatory } from "../lab/observatory.js";
 import { decodeWorld, encodeWorld, parseWorld } from "../lab/world.js";
 import type { WorldSpec } from "../lab/world.js";
@@ -102,7 +103,7 @@ function buildMenu(): MenuItem[] {
 }
 
 const ui: Ui = {
-  screen: "title", sel: save.tutorial ? 1 : 0, menu: buildMenu(), end: null, hint: null, toast: null, muted: false,
+  screen: "title", sel: save.tutorial ? 1 : 0, menu: buildMenu(), end: null, hint: null, brief: null, toast: null, muted: false,
   anchorAt: -1e9, heardAt: -1e9, heardHue: 0,
   hits: {
     rows: [], anchor: { x: 0, y: 0, w: 0, h: 0 }, menu: { x: 0, y: 0, w: 0, h: 0 }, copy: { x: 0, y: 0, w: 0, h: 0 },
@@ -128,6 +129,10 @@ function launch(): void {
   if (run.kind === "drift") game.charges = run.carry;
   tutor = run.kind === "tutorial" ? newTutor(game) : null;
   ui.hint = null;
+  const b = run.kind === "campaign" ? BRIEFS[level.id]
+    : run.kind === "drift" ? driftBrief(run.seed, run.depth, level.beacons.length, !!level.bulk) : undefined;
+  const t0 = performance.now();
+  ui.brief = b ? { title: b.title, lines: b.lines, since: t0, until: t0 + 7000 } : null;
   resetRender();
   acc = 0;
   anchorQueued = false;
@@ -388,6 +393,8 @@ function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   pollPadButtons();
+  if (ui.brief && (now > ui.brief.until || (game && Math.hypot(game.pos[0] - game.level.start[0], game.pos[1] - game.level.start[1]) > 4))) ui.brief = null;
+  sfx.drone(ui.screen === "play" && game && game.phase === "playing" ? game.dissonance / 100 : -1);
   if (ui.screen === "play" && game) {
     acc += dt;
     for (let n = 0; acc >= TICK && n < 5 && game.phase === "playing"; n++) {

@@ -1,4 +1,4 @@
-# STATUS — Dissonance-Lock v1.6
+# STATUS — Dissonance-Lock v1.7
 
 ## Live capabilities
 - Game: tutorial, 6 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
@@ -13,6 +13,8 @@
 - **NEW v1.5 Hidden dimension (BULK, key B):** the picture becomes a slice of a true 3D world (strata tree dim 3, domains become spheres). Z / Shift+Z move the selected emitter (or the probe) along the hidden axis. Off-plane emitters show their wavefront's section of the plane, spacetime and audit use 3D distance, and the BULK detector reports "apparent depth" vs actual from timing alone. It is exact in a uniform medium; slow wells fake depth, and fast drift hides it. Enabling bulk sets DIM 3 (flux ~ r^-2) so the energy audit stays honest. Depths travel in share links.
 
 - **NEW v1.6 Hidden Axis in the game:** campaign Level 6 and Drift from depth 5 run in a 3D world. Some beacons hover off the plane (marked ↑, dashed halo, no wavefront ring: you only hear them), so their echoes arrive later than the map implies. Same strata core, same contour-calibrated generator; a bot wins L6 in about a minute. Menu text now fits narrow phones.
+
+- **NEW v1.7 Atmosphere:** in-world framing (Lattice Ops transmissions at the start of every campaign sector and Drift sector, deterministic sector designations like "QK-47 · MIRRORFALL"), an animated title backdrop of drifting echoes with node status readout, vignette + scanlines, and an ambient drone whose beating is the dissonance (two close tones; the gap widens as DISS rises; M mutes). Offline precache now lists every script.
 
 ## Known limits
 - Bulk worlds use straight chords (bent paths need flat space); off-plane wavefront sections are redrawn every 0.5 s and assume arrival grows with in-plane distance.

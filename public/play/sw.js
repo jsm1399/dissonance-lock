@@ -1,9 +1,9 @@
-const CACHE = "dissonance-lock-v1.6";
+const CACHE = "dissonance-lock-v1.7";
 const ASSETS = [
   "./",
+  "./index.html",
   "./icon-192.png",
   "./icon-512.png",
-  "./index.html",
   "./js/core/laws/audit.js",
   "./js/core/laws/index.js",
   "./js/core/laws/laws.js",
@@ -17,6 +17,7 @@ const ASSETS = [
   "./js/core/strata/vec.js",
   "./js/game/gen.js",
   "./js/game/levels.js",
+  "./js/game/lore.js",
   "./js/game/main.js",
   "./js/game/pad.js",
   "./js/game/render.js",
@@ -25,6 +26,7 @@ const ASSETS = [
   "./js/game/sfx.js",
   "./js/game/state.js",
   "./js/game/tutorial.js",
+  "./js/lab/bulk.js",
   "./js/lab/lab.js",
   "./js/lab/observatory.js",
   "./js/lab/spacetime.js",
