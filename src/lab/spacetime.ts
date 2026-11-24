@@ -1,6 +1,6 @@
 import { CausalLedger } from "../core/strata/index.js";
 import type { CausalEvent, Vec } from "../core/strata/index.js";
-import { arrivalAt, emissionsUpTo, launchOf } from "./lab.js";
+import { arrivalAt, dist as dist3, emissionsUpTo, emitterPos, launchOf, probeSite } from "./lab.js";
 import type { Lab } from "./lab.js";
 
 /**
@@ -51,8 +51,7 @@ export function spacetime(lab: Lab, per = PER, margin = MARGIN, window = WINDOW)
   const dist = new Map<string, number>();
   let dmax = 1;
   for (const e of lab.spec.emitters) {
-    const p = lab.tree.toRootPos(e.domain, e.pos);
-    const d = Math.hypot(p[0] - lab.probe[0], p[1] - lab.probe[1]);
+    const d = dist3(lab.tree.toRootPos(e.domain, emitterPos(lab, e)), probeSite(lab));
     dist.set(e.id, d);
     dmax = Math.max(dmax, d);
   }

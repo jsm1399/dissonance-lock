@@ -1,13 +1,14 @@
-import { contour, wavefront } from "../core/strata/index.js";
+import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import type { Vec } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
 import type { Laws } from "../core/laws/index.js";
 import {
-  LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addRelay, adjust, clearCuts, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo,
+  LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addRelay, adjust, clearCuts, emitterPos, setDepth, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo,
   fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws,
 } from "./lab.js";
 import type { LawKey, Lab, Sel, Tool } from "./lab.js";
+import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import type { WorldSpec } from "./world.js";
@@ -34,6 +35,7 @@ const LAW_TITLE: Record<LawKey, string> = { time: "TIME", medium: "MEDIUM", dim:
 const lawValue = (k: LawKey, L: Laws): string => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
 const lawLabel = (k: LawKey, L: Laws): string => `${LAW_TITLE[k]}·${lawValue(k, L)}`;
 const lawIsDefault = (k: LawKey, L: Laws): boolean => L[k] === LAWFUL[k];
+const probeSiteOf = (l: Lab): number[] => (l.spec.bulk ? [l.probe[0], l.probe[1], l.probeZ] : [l.probe[0], l.probe[1]]);
 const sci = (x: number): string => (x === 0 ? "0" : Math.abs(x) >= 0.01 && Math.abs(x) < 1000 ? x.toPrecision(3) : x.toExponential(1));
 
 export interface Observatory {
@@ -58,7 +60,7 @@ export function createObservatory(hooks: Hooks): Observatory {
   let toast: { text: string; until: number } | null = null;
   let lastRev = -1;
   let view: "map" | "st" = "map";
-  const wf = new Map<string, { t: number; poly: Vec[] }>();
+  const wf = new Map<string, { t: number; poly: Vec[] | null }>();
 
   const say = (t: string, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
 
@@ -73,6 +75,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       { id: "cut", label: "CUT" }, { id: "uncut", label: l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT" },
       { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
       { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
+      { id: "bulk", label: l.spec.bulk ? "BULK·ON" : "BULK·OFF" },
       ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
       { id: "lawful", label: "LAWFUL" },
     ];
@@ -122,6 +125,10 @@ export function createObservatory(hooks: Hooks): Observatory {
       lab.tool = keepTool;
       wf.clear();
       say("world reset");
+    } else if (id === "bulk") {
+      const on = toggleBulk(l);
+      wf.clear();
+      say(on ? "bulk ON: a hidden axis (Z / Shift+Z), DIM 3" : "bulk OFF: flat plane");
     } else if (id === "cut") {
       if (l.sel?.kind !== "emitter") say("select an emitter, then CUT its highlighted pulse");
       else {
@@ -238,10 +245,16 @@ export function createObservatory(hooks: Hooks): Observatory {
         continue;
       }
       let c0 = wf.get(key);
-      if (!c0 || Math.abs(l.t - c0.t) >= 0.12) {
-        c0 = { t: l.t, poly: wavefront(l.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, l.t, 48, 170, 1.5) };
+      const off = Math.abs(em.pos[2] ?? 0) > 1e-9; // emitter hovering off the plane: draw the shell's section
+      if (!c0 || Math.abs(l.t - c0.t) >= (off ? 0.5 : 0.12)) {
+        c0 = {
+          t: l.t,
+          poly: off ? (age > 25 ? null : sliceWavefront(l.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, l.t, 24, 170))
+            : wavefront(l.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, l.t, 48, 170, 1.5),
+        };
         wf.set(key, c0);
       }
+      if (!c0.poly) continue;
       c.beginPath();
       c0.poly.forEach((q, i) => (i === 0 ? c.moveTo(X(q[0]), Y(q[1])) : c.lineTo(X(q[0]), Y(q[1]))));
       c.closePath();
@@ -255,13 +268,19 @@ export function createObservatory(hooks: Hooks): Observatory {
       if (!e.relay) continue;
       const src = l.spec.emitters.find((q) => q.id === e.relay?.from);
       if (!src) continue;
-      const a = l.tree.toRootPos(src.domain, src.pos), b = l.tree.toRootPos(e.domain, e.pos);
+      const a = l.tree.toRootPos(src.domain, emitterPos(l, src)), b = l.tree.toRootPos(e.domain, emitterPos(l, e));
       c.setLineDash([2, 3]); c.strokeStyle = hsl(e.hue, 70, 65, 0.6);
       c.beginPath(); c.moveTo(X(a[0]), Y(a[1])); c.lineTo(X(b[0]), Y(b[1])); c.stroke(); c.setLineDash([]);
     }
     // emitters
     for (const e of l.spec.emitters) {
-      const p = l.tree.toRootPos(e.domain, e.pos), cx = X(p[0]), cy = Y(p[1]);
+      const p = l.tree.toRootPos(e.domain, emitterPos(l, e)), cx = X(p[0]), cy = Y(p[1]);
+      if (l.spec.bulk && Math.abs(e.z ?? 0) > 1e-9) {
+        const up = (e.z as number) > 0, len = Math.min(16, Math.abs(e.z as number) * 0.4) * s;
+        c.strokeStyle = hsl(e.hue, 60, 65, 0.7); c.setLineDash([2, 2]);
+        c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx, cy + (up ? -len : len)); c.stroke(); c.setLineDash([]);
+        text(c, `z${up ? "+" : ""}${(e.z as number).toFixed(0)}`, cx + 4 * s, cy + (up ? -len : len), 9, hsl(e.hue, 80, 78), "left");
+      }
       c.beginPath(); c.arc(cx, cy, 2.2 * s, 0, Math.PI * 2); c.fillStyle = hsl(e.hue, 80, 60, 0.16); c.fill();
       c.beginPath(); c.arc(cx, cy, 1.4 * s, 0, Math.PI * 2); c.fillStyle = hsl(e.hue, 85, 62); c.fill();
       if (e.relay) { c.strokeStyle = hsl(e.hue, 85, 70); c.strokeRect(cx - 1.9 * s, cy - 1.9 * s, 3.8 * s, 3.8 * s); }
@@ -273,11 +292,12 @@ export function createObservatory(hooks: Hooks): Observatory {
     c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.stroke();
     c.beginPath(); c.moveTo(px - pr * 1.6, py); c.lineTo(px + pr * 1.6, py); c.moveTo(px, py - pr * 1.6); c.lineTo(px, py + pr * 1.6); c.stroke();
     c.lineWidth = 1;
+    if (l.spec.bulk && Math.abs(l.probeZ) > 1e-9) text(c, `z${l.probeZ > 0 ? "+" : ""}${l.probeZ.toFixed(0)}`, px + pr * 2, py - pr * 1.6, 9, "#fff", "left");
     // selection ring
     if (l.sel) {
       let sp: Vec | null = null, sr = 3 * s;
       if (l.sel.kind === "probe") sp = l.probe;
-      else if (l.sel.kind === "emitter") { const e = l.spec.emitters.find((q) => q.id === l.sel?.id); if (e) sp = l.tree.toRootPos(e.domain, e.pos); }
+      else if (l.sel.kind === "emitter") { const e = l.spec.emitters.find((q) => q.id === l.sel?.id); if (e) sp = l.tree.toRootPos(e.domain, emitterPos(l, e)); }
       else { const d = l.tree.domains().find((q) => q.id === l.sel?.id); if (d) { sp = d.centerRoot; sr = d.radiusRoot * s + 3; } }
       if (sp) {
         c.strokeStyle = `rgba(255,255,255,${0.55 + 0.25 * Math.sin(now / 200)})`;
@@ -314,8 +334,8 @@ export function createObservatory(hooks: Hooks): Observatory {
     }
     // emitter worldlines; ticks are the emitter's OWN clock beats seen in root time
     for (const e of l.spec.emitters) {
-      const p = l.tree.toRootPos(e.domain, e.pos);
-      const d = Math.hypot(p[0] - l.probe[0], p[1] - l.probe[1]);
+      const p = l.tree.toRootPos(e.domain, emitterPos(l, e));
+      const d = Math.hypot(...p.map((x, i) => x - (probeSiteOf(l)[i] ?? 0)));
       const x = X(d);
       c.strokeStyle = hsl(e.hue, 60, 50, 0.22);
       c.beginPath(); c.moveTo(x, py); c.lineTo(x, py + ph); c.stroke();
@@ -410,6 +430,11 @@ export function createObservatory(hooks: Hooks): Observatory {
       text(c, `${cone.origin.emitter} pulse ${cone.origin.k} · ▲ future ${cone.future} · ▼ past ${cone.past} · independent ${cone.independent}${cone.caused.size > 0 ? ` · caused ${cone.caused.size}` : ""}`,
         px + pw - 4, py + 36, 11, "#ffffff", "right", "700");
     } else text(c, "select an emitter in the inset → its causal cone", px + pw - 4, py + 36, 10, "rgba(180,200,220,0.6)", "right");
+    const dep = l.spec.bulk && l.sel?.kind === "emitter" ? apparentDepth(l, l.sel.id) : null;
+    if (dep) {
+      text(c, `bulk · ${dep.emitter}: apparent depth ${dep.apparent.toFixed(1)} · actual ${dep.actual.toFixed(1)} (flat-medium estimate)`,
+        px + pw - 4, py + 50, 10, "#ffb454", "right");
+    }
     const cap = R.w < 640 ? "dashed: lawful light · white: causal horizon · red: out of order"
       : "distance from probe ← · time ↑ · dashed: lawful light line · white: causal horizon · red: heard out of order";
     text(c, cap, px + pw, py + ph + 28, 9, "rgba(180,200,220,0.55)", "right");
@@ -422,7 +447,7 @@ export function createObservatory(hooks: Hooks): Observatory {
     for (const b of btns) {
       const isLaw = b.id.startsWith("law:");
       const bent = isLaw && !lawIsDefault(b.id.slice(4) as LawKey, lawsOf(l.spec));
-      const on = (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
+      const on = (b.id === "bulk" && !!l.spec.bulk) || (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
       const col = bent ? "#ffb454" : "#7fdbca";
       c.fillStyle = bent ? "rgba(255,180,84,0.16)" : on ? "rgba(127,219,202,0.22)" : "rgba(255,255,255,0.05)";
       c.fillRect(b.x, b.y, b.w, b.h);
@@ -477,7 +502,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
       text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
     }
-    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-7 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
+    let info = "Click the world to move the probe. Pick a tool to build. Keys 1-7 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
     if (l.sel?.kind === "domain") {
       const d = l.spec.domains.find((q) => q.id === l.sel?.id);
       if (d) info = `${d.id} · ${d.shearMin !== null ? "shear well" : "clock domain"} · size ${d.extent.toFixed(1)} · rate ${d.rate.toFixed(2)} · drifts ${d.changes.length}   [ ] size · - = rate · , . drift at t · Del`;
@@ -546,6 +571,14 @@ export function createObservatory(hooks: Hooks): Observatory {
         case "arrowleft": l.t = Math.max(0, l.t - (shift ? 5 : 1)); return true;
         case "arrowright": l.t = Math.min(TMAX, l.t + (shift ? 5 : 1)); return true;
         case "v": activate("view"); return true;
+        case "b": activate("bulk"); return true;
+        case "z": {
+          if (!l.spec.bulk) { say("bulk is off: press B for a hidden axis"); return true; }
+          const sel = l.sel && l.sel.kind !== "domain" ? l.sel : { kind: "probe" as const, id: "probe" };
+          setDepth(l, sel, shift ? -4 : 4); wf.clear();
+          say(`${sel.id} depth ${sel.kind === "probe" ? l.probeZ : (l.spec.emitters.find((q) => q.id === sel.id)?.z ?? 0)}`);
+          return true;
+        }
         case "k": activate("cut"); return true;
         case "u": activate("uncut"); return true;
         case "h": activate("heat"); return true;

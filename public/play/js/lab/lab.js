@@ -1,6 +1,7 @@
 import { arrivalField, countInversions, fermatField, lagSpread, march, sampleField } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
+import { isLawful } from "../core/laws/index.js";
 export const SIZE = 100;
 export const TMAX = 240;
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
@@ -15,9 +16,63 @@ export function newLab(spec = defaultWorld()) {
             seq = Math.max(seq, n + 1);
     }
     return {
-        spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], sel: null, tool: "select",
+        spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, sel: null, tool: "select",
         seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(),
     };
+}
+// ---------- bulk (hidden third dimension) ----------
+/** A point of the plane, lifted into the tree's dimension. */
+export const at3 = (lab, p) => (lab.spec.bulk ? [p[0], p[1], 0] : [p[0], p[1]]);
+/** Emitter site in its domain's own coordinates (3D when the world is bulk). */
+export const emitterPos = (lab, e) => (lab.spec.bulk ? [e.pos[0], e.pos[1], e.z ?? 0] : e.pos);
+export const probeSite = (lab) => (lab.spec.bulk ? [lab.probe[0], lab.probe[1], lab.probeZ] : lab.probe);
+/** Straight-line root distance between two root-frame points of the tree's dimension. */
+export const dist = (a, b) => Math.hypot(...a.map((x, i) => x - (b[i] ?? 0)));
+export const DEPTH_MAX = 40;
+/** Lift the world into / out of the hidden dimension. Keeps the laws honest: space of 3 wants flux ~ r^-2. */
+export function toggleBulk(lab) {
+    if (lab.spec.bulk) {
+        delete lab.spec.bulk;
+        for (const e of lab.spec.emitters)
+            delete e.z;
+        lab.probeZ = 0;
+        if (lab.spec.laws && lab.spec.laws.dim === 3)
+            lab.spec.laws = { ...lab.spec.laws, dim: 2 };
+    }
+    else {
+        lab.spec.bulk = true;
+        const cur = lawsOf(lab.spec);
+        if (cur.dim === 2)
+            lab.spec.laws = { ...cur, dim: 3 };
+    }
+    if (lab.spec.laws && isLawful(lab.spec.laws))
+        delete lab.spec.laws;
+    rebuild(lab);
+    return lab.spec.bulk === true;
+}
+/** Move the selection along the hidden axis by `dz` (emitters and the probe). False if not allowed. */
+export function setDepth(lab, sel, dz) {
+    if (!lab.spec.bulk)
+        return false;
+    if (sel.kind === "probe") {
+        lab.probeZ = clamp(lab.probeZ + dz, -DEPTH_MAX, DEPTH_MAX);
+        lab.arrivals.clear();
+        lab.rays.clear();
+        lab.bent.clear();
+        return true;
+    }
+    if (sel.kind !== "emitter")
+        return false;
+    const e = lab.spec.emitters.find((x) => x.id === sel.id);
+    if (!e)
+        return false;
+    const z = clamp((e.z ?? 0) + dz, -DEPTH_MAX, DEPTH_MAX);
+    if (z === 0)
+        delete e.z;
+    else
+        e.z = z;
+    rebuild(lab);
+    return true;
 }
 export function rebuild(lab) {
     lab.tree = buildTree(lab.spec);
@@ -32,7 +87,7 @@ export function rebuild(lab) {
 export function addDomain(lab, kind, at) {
     if (lab.spec.domains.length >= LIMITS.domains)
         return null;
-    const parent = lab.tree.domainAt(at);
+    const parent = lab.tree.domainAt(at3(lab, at));
     if (kind === "micro" && !parent.parent)
         return null;
     const rpl = parent.rootPerLocal;
@@ -40,7 +95,7 @@ export function addDomain(lab, kind, at) {
     let extentRoot = kind === "micro" ? 5 : 14;
     if (parent.parent)
         extentRoot = Math.min(extentRoot, parent.radiusRoot * 0.6);
-    const o = lab.tree.toLocalPos(parent.id, at);
+    const o = lab.tree.toLocalPos(parent.id, at3(lab, at));
     const def = {
         id: `d${lab.seq++}`, parent: parent.id, origin: [o[0], o[1]], scale,
         extent: extentRoot / rpl, echoSpeed: (lab.spec.rootSpeed * scale) / rpl,
@@ -54,8 +109,8 @@ export function addDomain(lab, kind, at) {
 export function addEmitter(lab, at) {
     if (lab.spec.emitters.length >= LIMITS.emitters)
         return null;
-    const dom = lab.tree.domainAt(at);
-    const o = lab.tree.toLocalPos(dom.id, at);
+    const dom = lab.tree.domainAt(at3(lab, at));
+    const o = lab.tree.toLocalPos(dom.id, at3(lab, at));
     const period = 4 * lab.tree.rateToRoot(dom, 0);
     const n = lab.spec.emitters.length;
     const def = {
@@ -71,7 +126,7 @@ export function hitTest(lab, at) {
         return { kind: "probe", id: "probe" };
     let best = null, bd = 3;
     for (const e of lab.spec.emitters) {
-        const p = lab.tree.toRootPos(e.domain, e.pos);
+        const p = lab.tree.toRootPos(e.domain, emitterPos(lab, e));
         const d = Math.hypot(p[0] - at[0], p[1] - at[1]);
         if (d < bd) {
             bd = d;
@@ -80,7 +135,7 @@ export function hitTest(lab, at) {
     }
     if (best)
         return best;
-    const dom = lab.tree.domainAt(at);
+    const dom = lab.tree.domainAt(at3(lab, at));
     return dom.parent ? { kind: "domain", id: dom.id } : null;
 }
 export function moveSel(lab, sel, to) {
@@ -96,14 +151,14 @@ export function moveSel(lab, sel, to) {
         const e = lab.spec.emitters.find((x) => x.id === sel.id);
         if (!e)
             return;
-        const o = lab.tree.toLocalPos(e.domain, at);
+        const o = lab.tree.toLocalPos(e.domain, at3(lab, at));
         e.pos = [o[0], o[1]];
     }
     else {
         const d = lab.spec.domains.find((x) => x.id === sel.id);
         if (!d)
             return;
-        const o = lab.tree.toLocalPos(d.parent, at);
+        const o = lab.tree.toLocalPos(d.parent, at3(lab, at));
         d.origin = [o[0], o[1]];
     }
     rebuild(lab);
@@ -218,7 +273,7 @@ export function launchOf(lab, id, k, ignoreOwnCut = false) {
             const src = lab.spec.emitters.find((x) => x.id === e.relay?.from);
             const sl = src ? launchOf(lab, src.id, k) : null;
             if (src && sl) {
-                const heardAt = march(lab.tree, { domain: src.domain, pos: src.pos }, sl.launchLocal, { domain: e.domain, pos: e.pos }, MARCH).rootTime;
+                const heardAt = march(lab.tree, { domain: src.domain, pos: emitterPos(lab, src) }, sl.launchLocal, { domain: e.domain, pos: emitterPos(lab, e) }, MARCH).rootTime;
                 const launchLocal = lab.tree.toLocalTime(e.domain, heardAt) + e.relay.delay;
                 out = { launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
             }
@@ -254,7 +309,7 @@ export function emissionsUpTo(lab, tRoot, per) {
             if (!L || (e.relay && L.launchRoot > tRoot))
                 continue;
             n++;
-            out.push({ emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal: L.launchLocal, launchRoot: L.launchRoot });
+            out.push({ emitter: e.id, hue: e.hue, k, domain: e.domain, pos: emitterPos(lab, e), launchLocal: L.launchLocal, launchRoot: L.launchRoot });
         }
     }
     return out;
@@ -269,7 +324,7 @@ function latestPulse(lab, e) {
     const tl = lab.tree.toLocalTime(e.domain, lab.t);
     const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
     const L = launchOf(lab, e.id, k);
-    return L ? { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal: L.launchLocal, launchRoot: L.launchRoot } : null;
+    return L ? { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: emitterPos(lab, e), launchLocal: L.launchLocal, launchRoot: L.launchRoot } : null;
 }
 /** Toggle a causal intervention: pulse k of `emitterId` never happens. Returns true if it is now cut. */
 export function toggleCut(lab, emitterId, k) {
@@ -296,8 +351,8 @@ export function addRelay(lab, at, fromId, delay = 1) {
     const src = lab.spec.emitters.find((e) => e.id === fromId);
     if (!src || lab.spec.emitters.length >= LIMITS.emitters)
         return null;
-    const dom = lab.tree.domainAt(at);
-    const o = lab.tree.toLocalPos(dom.id, at);
+    const dom = lab.tree.domainAt(at3(lab, at));
+    const o = lab.tree.toLocalPos(dom.id, at3(lab, at));
     const def = {
         id: `e${lab.seq++}`, domain: dom.id, pos: [o[0], o[1]], period: src.period, phase: 0,
         hue: (src.hue + 47) % 360, relay: { from: fromId, delay },
@@ -310,7 +365,7 @@ export function rayAt(lab, em) {
     const key = `${em.emitter}|${em.k}`;
     let r = lab.rays.get(key);
     if (!r || !lab.arrivals.has(key)) { // arrivals is the cache's authority: cleared => recompute
-        r = march(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, { domain: "root", pos: lab.probe }, MARCH);
+        r = march(lab.tree, { domain: em.domain, pos: em.pos }, em.launchLocal, { domain: "root", pos: probeSite(lab) }, MARCH);
         lab.rays.set(key, r);
         lab.arrivals.set(key, r.rootTime);
     }
@@ -318,7 +373,8 @@ export function rayAt(lab, em) {
 }
 export const BENT_N = 40;
 const BOX_MIN = [0, 0], BOX_MAX = [SIZE, SIZE];
-export const isBent = (lab) => lawsOf(lab.spec).path === "bent";
+/** Bent (Fermat) paths are solved on a flat grid; a bulk world uses straight chords. */
+export const isBent = (lab) => lawsOf(lab.spec).path === "bent" && !lab.spec.bulk;
 /** Bent-path arrival field of one emission; null until solved (see `pumpFields`). */
 export function fieldOf(lab, em, build = false) {
     const key = `${em.emitter}|${em.k}`;
@@ -402,7 +458,7 @@ export function computeHeat(lab, emitterId, n = 40) {
     if (!pulse)
         return false;
     const k = pulse.k;
-    const from = { domain: e.domain, pos: e.pos }, tEmit = pulse.launchLocal;
+    const from = { domain: e.domain, pos: emitterPos(lab, e) }, tEmit = pulse.launchLocal;
     const field = isBent(lab)
         ? fermatField(lab.tree, from, tEmit, BOX_MIN, BOX_MAX, n)
         : arrivalField(lab.tree, from, tEmit, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
@@ -450,8 +506,8 @@ export function auditEmitter(lab, emitterId) {
     if (!em)
         return null;
     const ray = rayAt(lab, em);
-    const from = lab.tree.toRootPos(e.domain, e.pos);
-    const r = Math.hypot(from[0] - lab.probe[0], from[1] - lab.probe[1]);
+    const from = lab.tree.toRootPos(e.domain, emitterPos(lab, e));
+    const r = dist(from, probeSite(lab));
     return { emitter: e.id, audit: auditRay(lawsOf(lab.spec), ray.segments, wellIds(lab.spec), ENERGY, r) };
 }
 export const ENERGY = 100;

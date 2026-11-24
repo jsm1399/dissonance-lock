@@ -27,6 +27,8 @@ export interface EmitterDef {
   hue: number;
   /** Relay: instead of its own clock it re-emits (after `delay` of its own local time) each pulse it hears from `from`. */
   relay?: { from: string; delay: number };
+  /** Height off the plane in the hidden third dimension (domain-local units). Only meaningful when the world is bulk. */
+  z?: number;
 }
 
 /** A suppressed pulse: emitter's k-th pulse never happens (and nothing it would have caused does). */
@@ -41,6 +43,8 @@ export interface WorldSpec {
   laws?: Laws;
   /** Pulses removed from history (causal interventions). Absent = none. */
   cuts?: Cut[];
+  /** A 3-dimensional world whose plane the picture is a slice of: emitters/probe may sit off it. Absent = flat. */
+  bulk?: boolean;
 }
 
 export const lawsOf = (spec: WorldSpec): Laws => spec.laws ?? LAWFUL;
@@ -84,7 +88,9 @@ export function validate(spec: WorldSpec): string[] {
     if (!fin(e.period) || e.period <= 0) errs.push(`emitter ${e.id}: period must be > 0`);
     if (!fin(e.phase) || e.phase < 0) errs.push(`emitter ${e.id}: phase must be >= 0`);
     if (!fin(e.hue)) errs.push(`emitter ${e.id}: bad hue`);
+    if (e.z !== undefined && (!fin(e.z) || Math.abs(e.z) > 200 || (!spec.bulk && e.z !== 0))) errs.push(`emitter ${e.id}: bad depth`);
   }
+  if (spec.bulk !== undefined && spec.bulk !== true) errs.push("bulk must be true or absent");
   const byId = new Map(spec.emitters.map((e) => [e.id, e]));
   for (const e of spec.emitters) {
     if (e.relay === undefined) continue;
@@ -110,7 +116,8 @@ export function validate(spec: WorldSpec): string[] {
 /** Build the strata under the world's laws: same data, different physics. */
 export function buildTree(spec: WorldSpec): StrataTree {
   const laws = lawsOf(spec);
-  const t = new StrataTree(2, spec.rootSpeed);
+  const bulk = spec.bulk === true;
+  const t = new StrataTree(bulk ? 3 : 2, spec.rootSpeed);
   const globalTime = laws.time === "global", uniform = laws.medium === "uniform";
   for (const d of spec.domains) {
     const radLocal = d.extent * d.scale;
@@ -118,9 +125,9 @@ export function buildTree(spec: WorldSpec): StrataTree {
     // uniform medium: pick the local echo speed that makes the ROOT speed equal rootSpeed everywhere
     const rplChild = t.get(d.parent).rootPerLocal / d.scale;
     t.add({
-      id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent,
+      id: d.id, parent: d.parent, origin: bulk ? [d.origin[0], d.origin[1], 0] : d.origin, scale: d.scale, extent: d.extent,
       echoSpeed: uniform ? spec.rootSpeed / rplChild : d.echoSpeed, rate: globalTime ? 1 : d.rate,
-      shear: sm === null ? undefined : (p) => sm + (1 - sm) * Math.min(1, Math.hypot(p[0], p[1]) / radLocal),
+      shear: sm === null ? undefined : (p) => sm + (1 - sm) * Math.min(1, Math.hypot(...p) / radLocal),
     });
   }
   if (!globalTime) for (const d of spec.domains) for (const [tm, rt] of d.changes) t.setRate(d.id, tm, rt);
@@ -162,9 +169,11 @@ export function parseWorld(raw: unknown): WorldSpec | null {
       })),
       emitters: j.emitters.map((e) => ({
         id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
+        ...(e.z === undefined ? {} : { z: e.z }),
         ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String((e.relay as { from: unknown }).from), delay: (e.relay as { delay: number }).delay } : (e.relay as never) }),
       })),
       ...(isLawful(laws) ? {} : { laws }),
+      ...(j.bulk === undefined ? {} : { bulk: j.bulk as true }),
       ...(Array.isArray(j.cuts) && j.cuts.length > 0 ? { cuts: j.cuts.map((c) => ({ emitter: String(c?.emitter), k: c?.k as number })) } : {}),
     };
     if (validate(spec).length > 0) return null;
@@ -202,7 +211,9 @@ export function encodeWorld(spec: WorldSpec): string {
     emitters: spec.emitters.map((e) => ({
       ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
       ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
+      ...(e.z !== undefined ? { z: r2(e.z) } : {}),
     })),
+    ...(spec.bulk ? { bulk: true as const } : {}),
     ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),
   };
   return b64(new TextEncoder().encode(JSON.stringify(rounded)));

@@ -1,4 +1,4 @@
-# STATUS — Dissonance-Lock v1.4
+# STATUS — Dissonance-Lock v1.5
 
 ## Live capabilities
 - Game: tutorial, 5 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
@@ -10,14 +10,16 @@
 
 - **NEW v1.4 Relays + causal intervention:** RELAY tool (key 6: click a source emitter, then empty space) makes an emitter that re-emits each pulse it hears after a delay on its own clock, so real cause→effect chains cross domains and clocks. CUT (K) removes the highlighted pulse from history and everything it would have caused; UNCUT (U) restores. Spacetime draws cause links, ✕ cut marks, and rings the pulses the origin actually caused (always a subset of its ledger-future). Relays and cuts travel in share links.
 
+- **NEW v1.5 Hidden dimension (BULK, key B):** the picture becomes a slice of a true 3D world (strata tree dim 3, domains become spheres). Z / Shift+Z move the selected emitter (or the probe) along the hidden axis. Off-plane emitters show their wavefront's section of the plane, spacetime and audit use 3D distance, and the BULK detector reports "apparent depth" vs actual from timing alone. It is exact in a uniform medium; slow wells fake depth, and fast drift hides it. Enabling bulk sets DIM 3 (flux ~ r^-2) so the energy audit stays honest. Depths travel in share links.
+
 ## Known limits
+- Bulk worlds use straight chords (bent paths need flat space); off-plane wavefront sections are redrawn every 0.5 s and assume arrival grows with in-plane distance.
 - Relay timing uses straight chords even under PATH·BENT.
 - Cone classification uses straight chords (upper bound on arrival) even under PATH·BENT.
 - Spacetime segments are straight (launch → arrival); bent paths show correct arrival but not the in-flight route.
-- Observatory is a 2D slice; core supports N-D but no 3D slice viewer yet.
 
 ## Next objectives
 1. Laws inside the game (bent Gauss/time laws as campaign levels).
-2. Dimensional slicing: 3D strata with a movable slice plane.
+2. Movable slice plane (tilt/offset) and 4D (two hidden axes) with a depth-triangulation instrument using several probes.
 3. Feedback: relay loops with damping/gain and a stability audit (can a world's causal graph run away?).
 4. Reality-edit scripting: save/restore named interventions as part of the link.

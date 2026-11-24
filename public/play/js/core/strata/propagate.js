@@ -69,7 +69,7 @@ export function wavefront(tree, from, tEmitLocal, tNowRoot, n, maxDist, step = 1
     const out = [];
     for (let i = 0; i < n; i++) {
         const th = (2 * Math.PI * i) / n;
-        const dir = [Math.cos(th), Math.sin(th)];
+        const dir = [Math.cos(th), Math.sin(th), ...Array.from({ length: tree.dim - 2 }, () => 0)];
         out.push(vadd(a, vscale(dir, reach(tree, a, dir, t0, tNowRoot, maxDist, step))));
     }
     return out;
@@ -83,7 +83,10 @@ export function arrivalField(tree, from, tEmitLocal, min, max, n, opts = {}) {
     let tmin = Infinity, tmax = -Infinity;
     for (let j = 0; j < n; j++) {
         for (let i = 0; i < n; i++) {
-            const p = [min[0] + ((i + 0.5) * (max[0] - min[0])) / n, min[1] + ((j + 0.5) * (max[1] - min[1])) / n];
+            const p = [
+                min[0] + ((i + 0.5) * (max[0] - min[0])) / n, min[1] + ((j + 0.5) * (max[1] - min[1])) / n,
+                ...Array.from({ length: tree.dim - 2 }, () => 0),
+            ];
             const t = march(tree, from, tEmitLocal, { domain: "root", pos: p }, opts).rootTime;
             values[j * n + i] = t;
             if (t < tmin)
@@ -93,4 +96,33 @@ export function arrivalField(tree, from, tEmitLocal, min, max, n, opts = {}) {
         }
     }
     return { n, values, tmin, tmax };
+}
+/**
+ * The z=0 plane's section of a wavefront from an emitter that may sit OFF the plane (a higher-dimensional tree).
+ * For each in-plane direction, bisect the radius at which the causal arrival equals `tNowRoot`.
+ * Returns null while the shell has not yet touched the plane. Assumes arrival grows with in-plane distance.
+ */
+export function sliceWavefront(tree, from, tEmitLocal, tNowRoot, n, maxDist, iters = 7) {
+    const a = tree.toRootPos(from.domain, from.pos);
+    const zeros = Array.from({ length: tree.dim - 2 }, () => 0);
+    const arrive = (s, th) => march(tree, from, tEmitLocal, { domain: "root", pos: [a[0] + s * Math.cos(th), a[1] + s * Math.sin(th), ...zeros] }, { maxStep: 1.5 }).rootTime;
+    if (arrive(0, 0) > tNowRoot)
+        return null;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        const th = (2 * Math.PI * i) / n;
+        let lo = 0, hi = maxDist;
+        if (arrive(hi, th) <= tNowRoot)
+            lo = hi;
+        else
+            for (let k = 0; k < iters; k++) {
+                const mid = (lo + hi) / 2;
+                if (arrive(mid, th) <= tNowRoot)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+        out.push([a[0] + lo * Math.cos(th), a[1] + lo * Math.sin(th)]);
+    }
+    return out;
 }
