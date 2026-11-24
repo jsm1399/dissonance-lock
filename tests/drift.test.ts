@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { hashSeed, rng } from "../src/game/rng.js";
 import { generateLevel } from "../src/game/gen.js";
-import { LEVELS } from "../src/game/levels.js";
+import { LEVELS, beaconPos } from "../src/game/levels.js";
 import { emptySave, parseSave, dailyKey, dailySeed } from "../src/game/save.js";
 import { newGame, stars, WORLD } from "../src/game/state.js";
 
@@ -40,7 +40,7 @@ test("generateLevel: valid worlds across seeds and depths", () => {
         assert.ok(d.centerRoot[0] >= 0 && d.centerRoot[0] <= WORLD && d.centerRoot[1] >= 0 && d.centerRoot[1] <= WORLD);
       }
       for (const b of L.beacons) {
-        const p = tree.toRootPos(b.domain, b.pos);
+        const p = tree.toRootPos(b.domain, beaconPos(L, b));
         assert.ok(p[0] >= -1 && p[0] <= WORLD + 1 && p[1] >= -1 && p[1] <= WORLD + 1, `${b.name} outside world`);
         assert.ok(b.period > 0);
       }

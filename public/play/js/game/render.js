@@ -1,5 +1,6 @@
 import { WORLD, MAX_CHARGES, CHARGE_REGEN } from "./state.js";
 import { wavefront } from "../core/strata/index.js";
+import { beaconPos } from "./levels.js";
 export function layout(w, h) {
     const hudH = w < 640 ? 96 : 64;
     const stripH = 58;
@@ -41,9 +42,11 @@ function updateWavefronts(g) {
         const c = wfCache.get(p.id);
         if (!c || g.time - c.t >= 0.1) {
             const b = g.level.beacons[p.beacon];
+            if (b.z)
+                continue; // hidden-axis beacons give no ring: you only hear them
             wfCache.set(p.id, {
                 t: g.time,
-                poly: wavefront(g.tree, { domain: b.domain, pos: b.pos }, p.emitLocal, g.time, 72, 170, 1.0),
+                poly: wavefront(g.tree, { domain: b.domain, pos: beaconPos(g.level, b) }, p.emitLocal, g.time, 72, 170, 1.0),
             });
         }
     }
@@ -210,7 +213,7 @@ function drawWorld(c, g, ui, v, now) {
     c.lineWidth = 1;
     // beacons
     g.level.beacons.forEach((b, i) => {
-        const pr = g.tree.toRootPos(b.domain, b.pos);
+        const pr = g.tree.toRootPos(b.domain, beaconPos(g.level, b));
         const lastLocal = b.phase + (g.nextK[i] - 1) * b.period;
         const since = g.time - g.tree.toRootTime(b.domain, lastLocal);
         const cx = X(pr[0]), cy = Y(pr[1]);
@@ -224,6 +227,15 @@ function drawWorld(c, g, ui, v, now) {
         c.fillStyle = hsl(b.hue, 85, 62);
         c.fill();
         text(c, b.name, cx, cy - 3.4 * v.s, 10, hsl(b.hue, 80, 75), "center", "700");
+        if (b.z) { // hovers off the plane: dashed halo + arrow, no wavefront
+            c.setLineDash([2, 3]);
+            c.strokeStyle = hsl(b.hue, 70, 70, 0.8);
+            c.beginPath();
+            c.arc(cx, cy, 3 * v.s, 0, Math.PI * 2);
+            c.stroke();
+            c.setLineDash([]);
+            text(c, "↑", cx + 3.4 * v.s, cy - 2.4 * v.s, 11, hsl(b.hue, 80, 80), "center", "700");
+        }
     });
     // trail + player
     for (let i = 0; i < trail.length; i++) {
@@ -339,7 +351,7 @@ function drawTitle(c, ui, v) {
         "Keep it inside the white band to build LOCK. Overload = defeat.",
         "RE-ANCHOR (space) resets dissonance. Move: WASD / arrows / drag.",
     ];
-    const fs = v.w < 520 ? 11 : 12;
+    const fs = Math.max(8, Math.min(12, (v.w - 16) / 37.8));
     for (const l of lines) {
         text(c, l, cx, y, fs, "rgba(200,215,235,0.85)", "center");
         y += fs + 7;
@@ -348,7 +360,7 @@ function drawTitle(c, ui, v) {
     ui.hits.rows = [];
     const n = ui.menu.length;
     const room = v.h - y - 34;
-    const rowH = Math.max(34, Math.min(50, room / n - 6));
+    const rowH = Math.max(30, Math.min(50, room / n - 6));
     ui.menu.forEach((m, i) => {
         const w = Math.min(500, v.w - 24), r = { x: cx - w / 2, y, w, h: rowH };
         ui.hits.rows.push(r);

@@ -64,15 +64,17 @@ function candidate(seed, depth, attempt) {
         };
         doms.push(micro);
     }
+    // from depth 5 the world gains a hidden axis; some root beacons hover off the plane
+    const bulk = depth >= 5;
     const build = () => {
-        const t = new StrataTree(2, ROOT_SPEED);
+        const t = new StrataTree(bulk ? 3 : 2, ROOT_SPEED);
         for (const d of doms) {
             const radLocal = d.extent * d.scale;
             t.add({
-                id: d.id, parent: d.parent, origin: d.origin, scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed,
+                id: d.id, parent: d.parent, origin: bulk ? [d.origin[0], d.origin[1], 0] : d.origin, scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed,
                 rate: d.rate,
                 shear: d.shearMin === undefined ? undefined
-                    : (p) => d.shearMin + (1 - d.shearMin) * Math.min(1, Math.hypot(p[0], p[1]) / radLocal),
+                    : (p) => d.shearMin + (1 - d.shearMin) * Math.min(1, Math.hypot(...p) / radLocal),
             });
         }
         for (const d of doms)
@@ -103,14 +105,16 @@ function candidate(seed, depth, attempt) {
             for (let k = 0; k < 40 && !rootPts.every((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) > 22); k++)
                 p = [U(8, 92), U(8, 92)];
             rootPts.push(p);
-            beacons.push({ name: String.fromCharCode(65 + i), domain: "root", pos: p, period: rootPeriod, phase: U(0, rootPeriod), hue });
+            const phase = U(0, rootPeriod);
+            const z = bulk && i % 3 === 2 ? Math.round(U(8, 28)) : undefined;
+            beacons.push({ name: String.fromCharCode(65 + i), domain: "root", pos: p, period: rootPeriod, phase, hue, ...(z === undefined ? {} : { z }) });
         }
     }
     const gain = 20 + Math.min(8, depth);
     const decay = 6;
     return {
         id: 100 + depth, tag: `D${depth}`, name: `Drift ${depth}`, blurb: `seed ${seed}`,
-        build, beacons, start: [50, 50],
+        build, beacons, start: [50, 50], ...(bulk ? { bulk: true } : {}),
         gain, decay, spreadCap: 10, lockRate: 2.6 + Math.min(0.6, depth * 0.05),
         bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
     };

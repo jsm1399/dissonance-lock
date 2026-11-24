@@ -1,6 +1,7 @@
 import { march, countInversions, lagSpread, vdist } from "../core/strata/index.js";
 import type { MarchOptions, Site, Vec } from "../core/strata/index.js";
 import type { LevelDef } from "./levels.js";
+import { beaconPos, planeSite } from "./levels.js";
 import type { StrataTree } from "../core/strata/index.js";
 
 export const WORLD = 100;
@@ -89,12 +90,12 @@ export function step(g: Game, input: Input): void {
   }
 
   // wavefront arrival at the player
-  const site: Site = { domain: "root", pos: g.pos };
+  const site: Site = { domain: "root", pos: planeSite(L, g.pos) };
   const still: Pulse[] = [];
   for (const p of g.flight) {
     if (p.calc === null || vdist(p.calc, g.pos) > REPATH) {
       const b = L.beacons[p.beacon];
-      p.arrival = march(g.tree, { domain: b.domain, pos: b.pos }, p.emitLocal, site, MARCH).rootTime;
+      p.arrival = march(g.tree, { domain: b.domain, pos: beaconPos(L, b) }, p.emitLocal, site, MARCH).rootTime;
       p.calc = g.pos;
     }
     if (p.arrival <= g.time) {
@@ -154,7 +155,7 @@ export function probeSpread(g: Game, pos: Vec): number {
     if (k < 1) continue;
     const b = L.beacons[i];
     const emitLocal = b.phase + k * b.period;
-    const a = march(g.tree, { domain: b.domain, pos: b.pos }, emitLocal, { domain: "root", pos }, MARCH);
+    const a = march(g.tree, { domain: b.domain, pos: beaconPos(L, b) }, emitLocal, { domain: "root", pos: planeSite(L, pos) }, MARCH);
     lags.push(a.rootTime - g.tree.toRootTime(b.domain, emitLocal));
   }
   return lagSpread(lags);

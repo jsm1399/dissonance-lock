@@ -147,7 +147,7 @@ test("design: every level has a coherent zone and an overload zone (contour exis
 test("design: a contour-following bot can win every level", () => {
   const dirs: [number, number][] = [[0, 0]];
   for (let i = 0; i < 8; i++) dirs.push([Math.cos((i * Math.PI) / 4), Math.sin((i * Math.PI) / 4)]);
-  for (const L of [LEVELS[0], LEVELS[2], LEVELS[4], generateLevel(20261122, 3)]) {
+  for (const L of [LEVELS[0], LEVELS[2], LEVELS[4], LEVELS[5], generateLevel(20261122, 3), generateLevel(20261122, 6)]) {
     const g = newGame(L);
     g.pos = [50, 50];
     const pStar = L.decay / L.gain;
@@ -163,4 +163,30 @@ test("design: a contour-following bot can win every level", () => {
     }
     assert.equal(g.phase, "won", `${L.name} unwinnable by bot (t=${g.time.toFixed(0)}, lock=${g.lock.toFixed(0)})`);
   }
+});
+
+test("bulk level: hidden-axis beacons are heard later than their map distance says, in 3D", () => {
+  const L = LEVELS[5];
+  assert.ok(L.bulk && L.beacons.some((b) => b.z));
+  const g = newGame(L);
+  assert.equal(g.tree.dim, 3);
+  const heard = new Map<number, number>();
+  for (let i = 0; i < 60 * 20; i++) {
+    step(g, idle);
+    for (const e of g.events) if (e.kind === "heard" && !heard.has(e.pulse.beacon)) heard.set(e.pulse.beacon, e.pulse.arrival - e.pulse.emitRoot);
+  }
+  // beacon D (index 3) hovers 30 above; compare with its in-plane geometry in a medium of speed 6
+  const D = L.beacons[3];
+  const planar = Math.hypot(D.pos[0] - 50, D.pos[1] - 50);
+  const lag = heard.get(3) as number;
+  assert.ok(lag > planar / 6 + 0.4, `lag ${lag.toFixed(2)} should exceed the planar ${(planar / 6).toFixed(2)}`);
+  assert.ok(Math.abs(lag - Math.hypot(planar, 30) / 6) < 0.15, "and matches the 3D distance");
+});
+
+test("bulk drift levels (depth >= 5) are deterministic, valid and still winnable by contour", () => {
+  const a = generateLevel(99, 6), b = generateLevel(99, 6);
+  assert.ok(a.bulk && b.bulk);
+  assert.deepEqual(a.beacons, b.beacons);
+  assert.ok(a.beacons.some((x) => x.z && x.z >= 8 && x.z <= 28));
+  assert.ok(!generateLevel(99, 4).bulk);
 });

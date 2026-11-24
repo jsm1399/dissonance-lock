@@ -1,4 +1,8 @@
 import { StrataTree } from "../core/strata/index.js";
+/** Beacon site in its domain's coordinates (3D in bulk levels). */
+export const beaconPos = (L, b) => (L.bulk ? [b.pos[0], b.pos[1], b.z ?? 0] : b.pos);
+/** The player's plane, lifted into the level's dimension. */
+export const planeSite = (L, p) => (L.bulk ? [p[0], p[1], 0] : p);
 export const ROOT_SPEED = 6;
 function level1() {
     const t = new StrataTree(2, ROOT_SPEED);
@@ -56,6 +60,16 @@ function level5() {
     t.setRate("fast", 30, 1);
     t.setRate("fast", 60, 4);
     t.setRate("pocket", 40, 2);
+    return t;
+}
+function level6() {
+    const t = new StrataTree(3, ROOT_SPEED);
+    t.add({ id: "fast", parent: "root", origin: [30, 60, 0], scale: 1, extent: 18, echoSpeed: ROOT_SPEED, rate: 3 });
+    t.add({
+        id: "well", parent: "root", origin: [72, 36, 0], scale: 1, extent: 15, echoSpeed: ROOT_SPEED,
+        shear: (p) => 0.2 + 0.8 * Math.min(1, Math.hypot(...p) / 15),
+    });
+    t.setRate("fast", 30, 1.5);
     return t;
 }
 /** Interactive tutorial world: open medium, three beacons, forgiving lock. */
@@ -127,7 +141,7 @@ export const LEVELS = [
     },
     {
         id: 5, tag: "L5", name: "Event Horizon",
-        blurb: "A deep well with a fast pocket inside. Nothing arrives when it should.",
+        blurb: "A deep well, a fast pocket. Nothing arrives on time.",
         build: level5,
         beacons: [
             { name: "A", domain: "root", pos: [90, 10], period: 3.2, phase: 0, hue: 190 },
@@ -139,5 +153,20 @@ export const LEVELS = [
         ],
         start: [50, 50],
         gain: 24, decay: 6, spreadCap: 16.8, lockRate: 3.0, bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
+    },
+    {
+        id: 6, tag: "L6", name: "Hidden Axis",
+        blurb: "Beacons hover off the plane. Echoes arrive late.",
+        build: level6, bulk: true,
+        beacons: [
+            { name: "A", domain: "root", pos: [10, 10], period: 3.3, phase: 0, hue: 190 },
+            { name: "B", domain: "root", pos: [88, 14], period: 3.9, phase: 0.7, hue: 40, z: 22 },
+            { name: "C", domain: "fast", pos: [-6, 6], period: 9, phase: 1, hue: 300 },
+            { name: "D", domain: "root", pos: [50, 92], period: 4.6, phase: 1.6, hue: 130, z: 30 },
+            { name: "E", domain: "well", pos: [4, -4], period: 4.2, phase: 0.4, hue: 0, z: 8 },
+            { name: "F", domain: "root", pos: [92, 88], period: 5.1, phase: 2.2, hue: 260 },
+        ],
+        start: [50, 50],
+        gain: 22, decay: 6, spreadCap: 11.6, lockRate: 2.8, bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
     },
 ];
