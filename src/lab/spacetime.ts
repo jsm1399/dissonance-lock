@@ -1,6 +1,6 @@
 import { CausalLedger } from "../core/strata/index.js";
 import type { CausalEvent, Vec } from "../core/strata/index.js";
-import { arrivalAt, emissionsUpTo } from "./lab.js";
+import { arrivalAt, emissionsUpTo, launchOf } from "./lab.js";
 import type { Lab } from "./lab.js";
 
 /**
@@ -23,7 +23,12 @@ export interface Worldline {
   heard: boolean;
   /** takes part in at least one causal inversion (emitted earlier, perceived later) */
   inverted: boolean;
+  /** relay pulses: "emitter|k" of the pulse that caused this one */
+  cause: string | null;
 }
+
+/** A pulse removed by intervention, at the time it would have launched. */
+export interface CutMark { emitter: string; k: number; hue: number; dist: number; launch: number }
 
 export interface HorizonPoint { emitter: string; dist: number; launch: number }
 
@@ -35,6 +40,7 @@ export interface Spacetime {
   inversions: number;
   /** farthest emitter distance (>= 1) */
   dmax: number;
+  cuts: CutMark[];
 }
 
 export const PER = 8;
@@ -56,6 +62,7 @@ export function spacetime(lab: Lab, per = PER, margin = MARGIN, window = WINDOW)
       emitter: em.emitter, hue: em.hue, k: em.k, domain: em.domain, pos: em.pos, launchLocal: em.launchLocal,
       dist: dist.get(em.emitter) ?? 0,
       launch: em.launchRoot, arrival, heard: arrival <= lab.t, inverted: false,
+      cause: lab.spec.emitters.find((e) => e.id === em.emitter)?.relay ? `${lab.spec.emitters.find((e) => e.id === em.emitter)?.relay?.from}|${em.k}` : null,
     };
   });
   const live = lines.filter((l) => l.heard && l.arrival >= lab.t - window);
@@ -78,7 +85,13 @@ export function spacetime(lab: Lab, per = PER, margin = MARGIN, window = WINDOW)
   const horizon = [...newest.values()]
     .map((l) => ({ emitter: l.emitter, dist: l.dist, launch: l.launch }))
     .sort((a, b) => a.dist - b.dist);
-  return { lines, horizon, inversions, dmax: dmax * 1.06 };
+  const cuts: CutMark[] = [];
+  for (const c of lab.spec.cuts ?? []) {
+    const L = launchOf(lab, c.emitter, c.k, true);
+    const e = lab.spec.emitters.find((x) => x.id === c.emitter);
+    if (L && e) cuts.push({ emitter: c.emitter, k: c.k, hue: e.hue, dist: dist.get(c.emitter) ?? 0, launch: L.launchRoot });
+  }
+  return { lines, horizon, inversions, dmax: dmax * 1.06, cuts };
 }
 
 // ---------- causal cone of one emission (uses the core CausalLedger) ----------
@@ -90,6 +103,8 @@ export interface Cone {
   past: number;
   future: number;
   independent: number;
+  /** pulses actually caused (through relay chains) by the origin, among those in view */
+  caused: Set<Worldline>;
 }
 
 const ledgers = new WeakMap<Lab, { rev: number; ledger: CausalLedger<string>; ev: Map<string, CausalEvent<string>> }>();
@@ -126,7 +141,15 @@ export function causalCone(lab: Lab, st: Spacetime, emitterId: string, aroundLau
     rel.set(l, v);
     if (v === "past") past++; else if (v === "future") future++; else independent++;
   }
-  return { origin, rel, past, future, independent };
+  const caused = new Set<Worldline>();
+  const frontier = [`${origin.emitter}|${origin.k}`];
+  while (frontier.length > 0) {
+    const key = frontier.pop() as string;
+    for (const l of st.lines) {
+      if (l.cause === key && !caused.has(l)) { caused.add(l); frontier.push(`${l.emitter}|${l.k}`); }
+    }
+  }
+  return { origin, rel, past, future, independent, caused };
 }
 
 const ledgerOf = (lab: Lab): CausalLedger<string> => (ledgers.get(lab) as { ledger: CausalLedger<string> }).ledger;

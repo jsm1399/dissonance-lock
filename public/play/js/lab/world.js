@@ -1,7 +1,7 @@
 import { StrataTree } from "../core/strata/index.js";
 import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
 export const lawsOf = (spec) => spec.laws ?? LAWFUL;
-export const LIMITS = { domains: 24, emitters: 24, changes: 8 };
+export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24 };
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
 const pair = (x) => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
 /** Human-readable problems; empty array = valid. Parents must precede children. */
@@ -57,6 +57,34 @@ export function validate(spec) {
             errs.push(`emitter ${e.id}: phase must be >= 0`);
         if (!fin(e.hue))
             errs.push(`emitter ${e.id}: bad hue`);
+    }
+    const byId = new Map(spec.emitters.map((e) => [e.id, e]));
+    for (const e of spec.emitters) {
+        if (e.relay === undefined)
+            continue;
+        const r = e.relay;
+        if (!r || typeof r !== "object" || typeof r.from !== "string" || !fin(r.delay) || r.delay < 0) {
+            errs.push(`emitter ${e.id}: bad relay`);
+            continue;
+        }
+        if (!byId.has(r.from)) {
+            errs.push(`emitter ${e.id}: relay source ${r.from} unknown`);
+            continue;
+        }
+        let x = e, n = 0;
+        while (x && x.relay && n++ <= spec.emitters.length)
+            x = byId.get(x.relay.from);
+        if (n > spec.emitters.length)
+            errs.push(`emitter ${e.id}: relay cycle`);
+    }
+    if (spec.cuts !== undefined) {
+        if (!Array.isArray(spec.cuts) || spec.cuts.length > LIMITS.cuts)
+            errs.push("bad or too many cuts");
+        else
+            for (const c of spec.cuts) {
+                if (!c || !byId.has(c.emitter) || !Number.isInteger(c.k) || c.k < 1)
+                    errs.push("bad cut");
+            }
     }
     return errs;
 }
@@ -117,8 +145,10 @@ export function parseWorld(raw) {
             })),
             emitters: j.emitters.map((e) => ({
                 id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
+                ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String(e.relay.from), delay: e.relay.delay } : e.relay }),
             })),
             ...(isLawful(laws) ? {} : { laws }),
+            ...(Array.isArray(j.cuts) && j.cuts.length > 0 ? { cuts: j.cuts.map((c) => ({ emitter: String(c?.emitter), k: c?.k })) } : {}),
         };
         if (validate(spec).length > 0)
             return null;
@@ -155,7 +185,9 @@ export function encodeWorld(spec) {
         })),
         emitters: spec.emitters.map((e) => ({
             ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
+            ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
         })),
+        ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),
     };
     return b64(new TextEncoder().encode(JSON.stringify(rounded)));
 }

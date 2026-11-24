@@ -10,7 +10,7 @@ export const TMAX = 240;
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 const MARCH = { maxStep: 1 };
 
-export type Tool = "select" | "fast" | "well" | "micro" | "emit" | "erase";
+export type Tool = "select" | "fast" | "well" | "micro" | "emit" | "relay" | "erase";
 export interface Sel { kind: "domain" | "emitter" | "probe"; id: string }
 
 export interface Emission {
@@ -36,7 +36,7 @@ export interface Lab {
   sel: Sel | null;
   tool: Tool;
   seq: number;
-  heat: { emitter: string; k: number; field: ArrivalField } | null;
+  heat: { emitter: string; k: number; launchLocal: number; field: ArrivalField } | null;
   /** bumps on every structural change (caches key off it) */
   rev: number;
   arrivals: Map<string, number>;
@@ -48,7 +48,11 @@ export interface Lab {
   bent: Map<string, number>;
   /** bent fields still being solved (0 = all ready) */
   pending: number;
+  /** launch times per pulse ("emitter|k"), null = never happens (cut or caused by a cut); valid for the current rev */
+  launches: Map<string, Launch | null>;
 }
+
+export interface Launch { launchLocal: number; launchRoot: number }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const clampPt = (p: Vec): Vec => [clamp(p[0], 0, SIZE), clamp(p[1], 0, SIZE)];
@@ -61,7 +65,7 @@ export function newLab(spec: WorldSpec = defaultWorld()): Lab {
   }
   return {
     spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], sel: null, tool: "select",
-    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0,
+    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(),
   };
 }
 
@@ -72,6 +76,7 @@ export function rebuild(lab: Lab): void {
   lab.rays.clear();
   lab.fields.clear();
   lab.bent.clear();
+  lab.launches.clear();
   lab.rev++;
 }
 
@@ -142,15 +147,29 @@ export function moveSel(lab: Lab, sel: Sel, to: Vec): void {
 
 export function removeSel(lab: Lab, sel: Sel): void {
   if (sel.kind === "emitter") {
-    lab.spec.emitters = lab.spec.emitters.filter((e) => e.id !== sel.id);
+    pruneEmitters(lab, new Set([sel.id]));
   } else if (sel.kind === "domain") {
     const dead = new Set<string>([sel.id]);
     for (const d of lab.spec.domains) if (dead.has(d.parent)) dead.add(d.id); // parents precede children
     lab.spec.domains = lab.spec.domains.filter((d) => !dead.has(d.id));
-    lab.spec.emitters = lab.spec.emitters.filter((e) => !dead.has(e.domain));
+    pruneEmitters(lab, new Set(lab.spec.emitters.filter((e) => dead.has(e.domain)).map((e) => e.id)));
   } else return;
   if (lab.sel && lab.sel.id === sel.id) lab.sel = null;
   rebuild(lab);
+}
+
+/** Remove emitters, everything that relays them (transitively), and their cuts. */
+function pruneEmitters(lab: Lab, dead: Set<string>): void {
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const e of lab.spec.emitters) if (!dead.has(e.id) && e.relay && dead.has(e.relay.from)) { dead.add(e.id); grew = true; }
+  }
+  lab.spec.emitters = lab.spec.emitters.filter((e) => !dead.has(e.id));
+  if (lab.spec.cuts) {
+    lab.spec.cuts = lab.spec.cuts.filter((c) => !dead.has(c.emitter));
+    if (lab.spec.cuts.length === 0) delete lab.spec.cuts;
+  }
+  if (lab.sel && dead.has(lab.sel.id)) lab.sel = null;
 }
 
 export type Knob = "size" | "rate" | "period";
@@ -164,7 +183,8 @@ export function adjust(lab: Lab, sel: Sel, what: Knob, dir: 1 | -1): void {
   } else if (sel.kind === "emitter" && what === "period") {
     const e = lab.spec.emitters.find((x) => x.id === sel.id);
     if (!e) return;
-    e.period = clamp(e.period * Math.pow(1.15, dir), 0.8, 60);
+    if (e.relay) e.relay.delay = clamp(Math.max(0.1, e.relay.delay) * Math.pow(1.25, -dir), 0, 30);
+    else e.period = clamp(e.period * Math.pow(1.15, dir), 0.8, 60);
   } else return;
   rebuild(lab);
 }
@@ -188,21 +208,112 @@ export function driftRate(lab: Lab, sel: Sel, factor: number): boolean {
   return true;
 }
 
+const cutKey = (id: string, k: number) => `${id}|${k}`;
+export const isCut = (lab: Lab, id: string, k: number): boolean => !!lab.spec.cuts?.some((c) => c.emitter === id && c.k === k);
+
+/**
+ * When pulse k of an emitter really launches. Free-running emitters follow their own clock; a relay launches
+ * `delay` (its own local time) after the source's pulse k reaches it. Cut pulses, and pulses a cut would have
+ * caused, never happen (null). `ignoreOwnCut` gives the nominal time of a cut pulse (for drawing the cut).
+ */
+export function launchOf(lab: Lab, id: string, k: number, ignoreOwnCut = false): Launch | null {
+  const key = cutKey(id, k);
+  if (!ignoreOwnCut) {
+    const hit = lab.launches.get(key);
+    if (hit !== undefined) return hit;
+  }
+  const e = lab.spec.emitters.find((x) => x.id === id);
+  let out: Launch | null = null;
+  if (e && (ignoreOwnCut || !isCut(lab, id, k))) {
+    if (!e.relay) {
+      const launchLocal = e.phase + k * e.period;
+      out = { launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
+    } else {
+      const src = lab.spec.emitters.find((x) => x.id === e.relay?.from);
+      const sl = src ? launchOf(lab, src.id, k) : null;
+      if (src && sl) {
+        const heardAt = march(lab.tree, { domain: src.domain, pos: src.pos }, sl.launchLocal, { domain: e.domain, pos: e.pos }, MARCH).rootTime;
+        const launchLocal = lab.tree.toLocalTime(e.domain, heardAt) + e.relay.delay;
+        out = { launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
+      }
+    }
+  }
+  if (!ignoreOwnCut) lab.launches.set(key, out);
+  return out;
+}
+
+/** Root of a relay chain: the free-running emitter that ultimately drives it. */
+function driver(lab: Lab, e: EmitterDef): EmitterDef {
+  let x = e;
+  for (let n = 0; x.relay && n <= lab.spec.emitters.length; n++) {
+    const up = lab.spec.emitters.find((q) => q.id === x.relay?.from);
+    if (!up) break;
+    x = up;
+  }
+  return x;
+}
+
 /** The latest `per` emissions of every emitter that have launched by root time `tRoot`. */
 export function emissionsUpTo(lab: Lab, tRoot: number, per: number): Emission[] {
   const out: Emission[] = [];
   for (const e of lab.spec.emitters) {
-    const tl = lab.tree.toLocalTime(e.domain, tRoot);
-    const kmax = Math.floor((tl - e.phase) / e.period);
-    for (let k = kmax; k >= Math.max(1, kmax - per + 1); k--) {
-      const launchLocal = e.phase + k * e.period;
-      out.push({
-        emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal,
-        launchRoot: lab.tree.toRootTime(e.domain, launchLocal),
-      });
+    const d = driver(lab, e);
+    const tl = lab.tree.toLocalTime(d.domain, tRoot);
+    const kmax = Math.floor((tl - d.phase) / d.period);
+    // a relay lags its driver by flight time + delay: scan back until `per` pulses have actually launched
+    const kmin = e.relay ? Math.max(1, kmax - 400) : Math.max(1, kmax - per + 1);
+    let n = 0;
+    for (let k = kmax; k >= kmin && n < per; k--) {
+      const L = launchOf(lab, e.id, k);
+      if (!L || (e.relay && L.launchRoot > tRoot)) continue;
+      n++;
+      out.push({ emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal: L.launchLocal, launchRoot: L.launchRoot });
     }
   }
   return out;
+}
+
+/** The newest pulse of an emitter that has launched by lab.t (or its first pulse if none yet). */
+function latestPulse(lab: Lab, e: EmitterDef): Emission | null {
+  const got = emissionsUpTo(lab, lab.t, 1).find((x) => x.emitter === e.id);
+  if (got) return got;
+  if (e.relay) return null;
+  const tl = lab.tree.toLocalTime(e.domain, lab.t);
+  const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
+  const L = launchOf(lab, e.id, k);
+  return L ? { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal: L.launchLocal, launchRoot: L.launchRoot } : null;
+}
+
+/** Toggle a causal intervention: pulse k of `emitterId` never happens. Returns true if it is now cut. */
+export function toggleCut(lab: Lab, emitterId: string, k: number): boolean {
+  const cuts = lab.spec.cuts ?? (lab.spec.cuts = []);
+  const i = cuts.findIndex((c) => c.emitter === emitterId && c.k === k);
+  let now = false;
+  if (i >= 0) cuts.splice(i, 1);
+  else if (cuts.length < LIMITS.cuts) { cuts.push({ emitter: emitterId, k }); now = true; }
+  if (cuts.length === 0) delete lab.spec.cuts;
+  rebuild(lab);
+  return now;
+}
+
+export function clearCuts(lab: Lab): void {
+  delete lab.spec.cuts;
+  rebuild(lab);
+}
+
+/** A relay of `fromId` at `at`: it re-emits every pulse it hears, `delay` of its own time later. */
+export function addRelay(lab: Lab, at: Vec, fromId: string, delay = 1): string | null {
+  const src = lab.spec.emitters.find((e) => e.id === fromId);
+  if (!src || lab.spec.emitters.length >= LIMITS.emitters) return null;
+  const dom = lab.tree.domainAt(at);
+  const o = lab.tree.toLocalPos(dom.id, at);
+  const def: EmitterDef = {
+    id: `e${lab.seq++}`, domain: dom.id, pos: [o[0], o[1]], period: src.period, phase: 0,
+    hue: (src.hue + 47) % 360, relay: { from: fromId, delay },
+  };
+  lab.spec.emitters.push(def);
+  rebuild(lab);
+  return def.id;
 }
 
 export function rayAt(lab: Lab, em: Emission): Arrival {
@@ -295,13 +406,14 @@ export function metrics(lab: Lab, window = 12): Metrics {
 export function computeHeat(lab: Lab, emitterId: string, n = 40): boolean {
   const e = lab.spec.emitters.find((x) => x.id === emitterId);
   if (!e) return false;
-  const tl = lab.tree.toLocalTime(e.domain, lab.t);
-  const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
-  const from = { domain: e.domain, pos: e.pos }, tEmit = e.phase + k * e.period;
+  const pulse = latestPulse(lab, e);
+  if (!pulse) return false;
+  const k = pulse.k;
+  const from = { domain: e.domain, pos: e.pos }, tEmit = pulse.launchLocal;
   const field = isBent(lab)
     ? fermatField(lab.tree, from, tEmit, BOX_MIN, BOX_MAX, n)
     : arrivalField(lab.tree, from, tEmit, [0, 0], [SIZE, SIZE], n, { maxStep: 1.5 });
-  lab.heat = { emitter: emitterId, k, field };
+  lab.heat = { emitter: emitterId, k, launchLocal: tEmit, field };
   return true;
 }
 
@@ -340,10 +452,8 @@ export function auditEmitter(lab: Lab, emitterId?: string): { emitter: string; a
   const id = emitterId ?? (lab.sel?.kind === "emitter" ? lab.sel.id : lab.spec.emitters[0]?.id);
   const e = lab.spec.emitters.find((x) => x.id === id);
   if (!e) return null;
-  const tl = lab.tree.toLocalTime(e.domain, lab.t);
-  const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
-  const launchLocal = e.phase + k * e.period;
-  const em: Emission = { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: e.pos, launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
+  const em = latestPulse(lab, e);
+  if (!em) return null;
   const ray = rayAt(lab, em);
   const from = lab.tree.toRootPos(e.domain, e.pos);
   const r = Math.hypot(from[0] - lab.probe[0], from[1] - lab.probe[1]);

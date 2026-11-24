@@ -1,5 +1,5 @@
 import { CausalLedger } from "../core/strata/index.js";
-import { arrivalAt, emissionsUpTo } from "./lab.js";
+import { arrivalAt, emissionsUpTo, launchOf } from "./lab.js";
 export const PER = 8;
 export const MARGIN = 0.25;
 export const WINDOW = 12;
@@ -18,6 +18,7 @@ export function spacetime(lab, per = PER, margin = MARGIN, window = WINDOW) {
             emitter: em.emitter, hue: em.hue, k: em.k, domain: em.domain, pos: em.pos, launchLocal: em.launchLocal,
             dist: dist.get(em.emitter) ?? 0,
             launch: em.launchRoot, arrival, heard: arrival <= lab.t, inverted: false,
+            cause: lab.spec.emitters.find((e) => e.id === em.emitter)?.relay ? `${lab.spec.emitters.find((e) => e.id === em.emitter)?.relay?.from}|${em.k}` : null,
         };
     });
     const live = lines.filter((l) => l.heard && l.arrival >= lab.t - window);
@@ -42,7 +43,14 @@ export function spacetime(lab, per = PER, margin = MARGIN, window = WINDOW) {
     const horizon = [...newest.values()]
         .map((l) => ({ emitter: l.emitter, dist: l.dist, launch: l.launch }))
         .sort((a, b) => a.dist - b.dist);
-    return { lines, horizon, inversions, dmax: dmax * 1.06 };
+    const cuts = [];
+    for (const c of lab.spec.cuts ?? []) {
+        const L = launchOf(lab, c.emitter, c.k, true);
+        const e = lab.spec.emitters.find((x) => x.id === c.emitter);
+        if (L && e)
+            cuts.push({ emitter: c.emitter, k: c.k, hue: e.hue, dist: dist.get(c.emitter) ?? 0, launch: L.launchRoot });
+    }
+    return { lines, horizon, inversions, dmax: dmax * 1.06, cuts };
 }
 const ledgers = new WeakMap();
 function eventOf(lab, w) {
@@ -88,6 +96,17 @@ export function causalCone(lab, st, emitterId, aroundLaunch) {
         else
             independent++;
     }
-    return { origin, rel, past, future, independent };
+    const caused = new Set();
+    const frontier = [`${origin.emitter}|${origin.k}`];
+    while (frontier.length > 0) {
+        const key = frontier.pop();
+        for (const l of st.lines) {
+            if (l.cause === key && !caused.has(l)) {
+                caused.add(l);
+                frontier.push(`${l.emitter}|${l.k}`);
+            }
+        }
+    }
+    return { origin, rel, past, future, independent, caused };
 }
 const ledgerOf = (lab) => ledgers.get(lab).ledger;
