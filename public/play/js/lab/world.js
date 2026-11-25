@@ -1,7 +1,7 @@
 import { StrataTree } from "../core/strata/index.js";
 import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
 export const lawsOf = (spec) => spec.laws ?? LAWFUL;
-export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4 };
+export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4, zetaMin: 0.2, zetaMax: 5 };
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
 const pair = (x) => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
 /** Human-readable problems; empty array = valid. Parents must precede children. */
@@ -80,6 +80,14 @@ export function validate(spec) {
             x = byId.get(x.relay.from);
         if (n > spec.emitters.length)
             errs.push(`emitter ${e.id}: relay cycle`);
+    }
+    for (const e of spec.emitters) {
+        if (e.zeta === undefined)
+            continue;
+        if (!fin(e.zeta) || e.zeta < LIMITS.zetaMin || e.zeta > LIMITS.zetaMax)
+            errs.push(`emitter ${e.id}: bad zeta scale`);
+        else if (e.relay)
+            errs.push(`emitter ${e.id}: a relay follows its source, it cannot keep zeta time`);
     }
     for (const e of spec.emitters) {
         if (e.fb === undefined)
@@ -161,6 +169,7 @@ export function parseWorld(raw) {
             emitters: j.emitters.map((e) => ({
                 id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
                 ...(e.z === undefined ? {} : { z: e.z }),
+                ...(e.zeta === undefined ? {} : { zeta: e.zeta }),
                 ...(e.fb === undefined ? {} : { fb: e.fb && typeof e.fb === "object" ? { from: String(e.fb.from), delay: e.fb.delay, gain: e.fb.gain } : e.fb }),
                 ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String(e.relay.from), delay: e.relay.delay } : e.relay }),
             })),
@@ -205,6 +214,7 @@ export function encodeWorld(spec) {
             ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
             ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
             ...(e.z !== undefined ? { z: r2(e.z) } : {}),
+            ...(e.zeta !== undefined ? { zeta: r2(e.zeta) } : {}),
             ...(e.fb ? { fb: { from: e.fb.from, delay: r2(e.fb.delay), gain: r2(e.fb.gain) } } : {}),
         })),
         ...(spec.bulk ? { bulk: true } : {}),

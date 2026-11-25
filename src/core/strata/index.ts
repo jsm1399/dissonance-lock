@@ -6,3 +6,4 @@ export * from "./ledger.js";
 export * from "./dissonance.js";
 export * from "./fermat.js";
 export * from "./feedback.js";
+export * from "./zeta.js";

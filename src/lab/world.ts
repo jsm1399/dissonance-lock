@@ -32,6 +32,11 @@ export interface EmitterDef {
    * itself included) after `delay` of its own local time, amplitude x `gain`. Taps may form cycles.
    */
   fb?: { from: string; delay: number; gain: number };
+  /**
+   * Arithmetic beacon: instead of a metronome, pulse k launches at phase + zeta x gamma_k (gamma_k = the k-th
+   * non-trivial zero of the Riemann zeta function, 14.13, 21.02, 25.01, ...). Free-running emitters only.
+   */
+  zeta?: number;
   /** Height off the plane in the hidden third dimension (domain-local units). Only meaningful when the world is bulk. */
   z?: number;
 }
@@ -54,7 +59,7 @@ export interface WorldSpec {
 
 export const lawsOf = (spec: WorldSpec): Laws => spec.laws ?? LAWFUL;
 
-export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4 };
+export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4, zetaMin: 0.2, zetaMax: 5 };
 
 const fin = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 const pair = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
@@ -108,6 +113,11 @@ export function validate(spec: WorldSpec): string[] {
     let x: EmitterDef | undefined = e, n = 0;
     while (x && x.relay && n++ <= spec.emitters.length) x = byId.get(x.relay.from);
     if (n > spec.emitters.length) errs.push(`emitter ${e.id}: relay cycle`);
+  }
+  for (const e of spec.emitters) {
+    if (e.zeta === undefined) continue;
+    if (!fin(e.zeta) || e.zeta < LIMITS.zetaMin || e.zeta > LIMITS.zetaMax) errs.push(`emitter ${e.id}: bad zeta scale`);
+    else if (e.relay) errs.push(`emitter ${e.id}: a relay follows its source, it cannot keep zeta time`);
   }
   for (const e of spec.emitters) {
     if (e.fb === undefined) continue;
@@ -182,6 +192,7 @@ export function parseWorld(raw: unknown): WorldSpec | null {
       emitters: j.emitters.map((e) => ({
         id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
         ...(e.z === undefined ? {} : { z: e.z }),
+        ...(e.zeta === undefined ? {} : { zeta: e.zeta }),
         ...(e.fb === undefined ? {} : { fb: e.fb && typeof e.fb === "object" ? { from: String((e.fb as { from: unknown }).from), delay: (e.fb as { delay: number }).delay, gain: (e.fb as { gain: number }).gain } : (e.fb as never) }),
         ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String((e.relay as { from: unknown }).from), delay: (e.relay as { delay: number }).delay } : (e.relay as never) }),
       })),
@@ -225,6 +236,7 @@ export function encodeWorld(spec: WorldSpec): string {
       ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
       ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
       ...(e.z !== undefined ? { z: r2(e.z) } : {}),
+      ...(e.zeta !== undefined ? { zeta: r2(e.zeta) } : {}),
       ...(e.fb ? { fb: { from: e.fb.from, delay: r2(e.fb.delay), gain: r2(e.fb.gain) } } : {}),
     })),
     ...(spec.bulk ? { bulk: true as const } : {}),

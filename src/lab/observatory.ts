@@ -4,7 +4,7 @@ import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
 import type { Laws } from "../core/laws/index.js";
 import {
-  LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, isEcho, removeFeedback, setDepth, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo,
+  LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo,
   fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws,
 } from "./lab.js";
 import type { LawKey, Lab, Sel, Tool } from "./lab.js";
@@ -28,7 +28,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
   { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 166;
+const BOT_H = 184;
 
 const LAW_HOTKEY: Record<string, LawKey> = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
 const LAW_TITLE: Record<LawKey, string> = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
@@ -76,7 +76,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       { id: "play", label: l.playing ? "PAUSE" : "PLAY" },
       { id: "speed", label: `×${SPEEDS[l.speedIdx]}` },
       { id: "heat", label: l.heat ? "HEAT ✓" : "HEAT" },
-      { id: "cut", label: "CUT" }, { id: "uncut", label: l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT" },
+      { id: "zeta", label: "ZETA" }, { id: "cut", label: "CUT" }, { id: "uncut", label: l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT" },
       { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
       { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
       { id: "bulk", label: l.spec.bulk ? "BULK·ON" : "BULK·OFF" },
@@ -133,6 +133,14 @@ export function createObservatory(hooks: Hooks): Observatory {
       const on = toggleBulk(l);
       wf.clear();
       say(on ? "bulk ON: a hidden axis (Z / Shift+Z), DIM 3" : "bulk OFF: flat plane");
+    } else if (id === "zeta") {
+      const sl = l.sel;
+      if (sl?.kind !== "emitter") say("select a free-running emitter, then ZETA");
+      else {
+        const on = toggleZeta(l, sl.id);
+        wf.clear();
+        say(on === null ? "a relay follows its source: it cannot keep zeta time" : on ? `${sl.id} now pulses at the zeta zeros (- = scale)` : `${sl.id} back to a metronome`);
+      }
     } else if (id === "cut") {
       if (l.sel?.kind !== "emitter") say("select an emitter, then CUT its highlighted pulse");
       else {
@@ -324,7 +332,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       c.beginPath(); c.arc(cx, cy, 2.2 * s, 0, Math.PI * 2); c.fillStyle = hsl(e.hue, 80, 60, 0.16); c.fill();
       c.beginPath(); c.arc(cx, cy, 1.4 * s, 0, Math.PI * 2); c.fillStyle = hsl(e.hue, 85, 62); c.fill();
       if (e.relay) { c.strokeStyle = hsl(e.hue, 85, 70); c.strokeRect(cx - 1.9 * s, cy - 1.9 * s, 3.8 * s, 3.8 * s); }
-      text(c, e.id, cx, cy - 3.2 * s, 10, hsl(e.hue, 80, 78), "center", "700");
+      text(c, e.zeta !== undefined ? `${e.id}ζ` : e.id, cx, cy - 3.2 * s, 10, hsl(e.hue, 80, 78), "center", "700");
     }
     // probe
     const px = X(l.probe[0]), py = Y(l.probe[1]), pr = 1.8 * s;
@@ -560,6 +568,21 @@ export function createObservatory(hooks: Hooks): Observatory {
       text(c, "LOOPS", 14, botTop + 110, 10, "rgba(180,200,220,0.6)");
       text(c, msg, 64, botTop + 110, 11, col);
     }
+    if (hasZeta(l)) {
+      const zf = zetaFix(l);
+      let msg = "", col = "rgba(180,200,220,0.7)";
+      if (zf) {
+        if (!zf.fix) msg = `${zf.emitter}ζ listening… ${zf.heard}/5 consecutive pulses heard`;
+        else {
+          const f = zf.fix, z = zf.identified ? `✓ zeros #${f.offset}–#${f.offset + zf.heard - 1}` : `✗ guessed #${f.offset}, truly #${zf.firstK}`;
+          const v = zf.verdict === "baseline" ? "arithmetic time kept" : zf.verdict === "bent" ? `bent ${(zf.deviation * 100).toFixed(1)}%` : zf.verdict === "broken" ? `BROKEN ${(zf.deviation * 100).toFixed(0)}%` : "ambiguous";
+          msg = `${zf.emitter}ζ ${z} · sender clock ×${zf.rateEst.toFixed(2)} (true ×${zf.rateTrue.toFixed(2)}) · residual ${f.residual.toFixed(3)}s · ${v}`;
+          col = zf.verdict === "baseline" && zf.identified ? "rgba(127,219,202,0.95)" : zf.verdict === "bent" ? "#ffb454" : "#ff4d6d";
+        }
+      }
+      text(c, "FIX", 14, botTop + 128, 10, "rgba(180,200,220,0.6)");
+      text(c, msg, 64, botTop + 128, 11, col);
+    }
     let info = "Click the world to move the probe. Pick a tool to build. Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
     if (l.sel?.kind === "domain") {
       const d = l.spec.domains.find((q) => q.id === l.sel?.id);
@@ -569,13 +592,14 @@ export function createObservatory(hooks: Hooks): Observatory {
       if (e && e.fb) info = `${e.id} · re-emits ${e.fb.from} +${e.fb.delay.toFixed(1)} ×${e.fb.gain.toFixed(2)}   Q/W gain · E/R delay · Y remove loop · K cut pulse · Del`;
       else if (e) info = e.relay
         ? `${e.id} · relay of ${e.relay.from} +${e.relay.delay.toFixed(1)} (own clock) · in ${e.domain}   - = delay · K cut pulse · H heat · Del`
-        : `${e.id} · period ${e.period.toFixed(1)} (own clock) · in ${e.domain}   - = period · K cut pulse · H heat · Del`;
+        : e.zeta !== undefined ? `${e.id}ζ · pulses at the zeta zeros ×${e.zeta.toFixed(2)} (own clock) · in ${e.domain}   - = scale · J metronome · K cut pulse · H heat · Del`
+        : `${e.id} · period ${e.period.toFixed(1)} (own clock) · in ${e.domain}   - = period · J zeta beacon · K cut pulse · H heat · Del`;
     } else if (l.sel?.kind === "probe") info = "probe — drag it anywhere; it reads the causal timeline at that point";
     // wrap the hint line to the available width (max 2 lines)
     c.font = `400 10px ${FONT}`;
     const maxW = w - 28;
     const words = info.split(" ");
-    let line = "", ly = botTop + 132, lines = 0;
+    let line = "", ly = botTop + 150, lines = 0;
     for (const wd of words) {
       const test = line ? `${line} ${wd}` : wd;
       if (c.measureText(test).width > maxW && line && lines < 1) {
@@ -649,6 +673,7 @@ export function createObservatory(hooks: Hooks): Observatory {
           else wf.clear();
           return true;
         }
+        case "j": activate("zeta"); return true;
         case "k": activate("cut"); return true;
         case "u": activate("uncut"); return true;
         case "h": activate("heat"); return true;

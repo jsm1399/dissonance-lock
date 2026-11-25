@@ -1,5 +1,5 @@
-import { FB_BASE, analyzeFeedback, arrivalField, countInversions, fermatField, lagSpread, march, runFeedback, sampleField } from "../core/strata/index.js";
-import type { Arrival, ArrivalField, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
+import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
+import type { Arrival, ArrivalField, BeaconFix, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
 import type { Laws, RayAudit } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
@@ -246,6 +246,7 @@ export function adjust(lab: Lab, sel: Sel, what: Knob, dir: 1 | -1): void {
     const e = lab.spec.emitters.find((x) => x.id === sel.id);
     if (!e) return;
     if (e.relay) e.relay.delay = clamp(Math.max(0.1, e.relay.delay) * Math.pow(1.25, -dir), 0, 30);
+    else if (e.zeta !== undefined) e.zeta = clamp(Math.round(e.zeta * Math.pow(1.15, dir) * 1000) / 1000, LIMITS.zetaMin, LIMITS.zetaMax);
     else e.period = clamp(e.period * Math.pow(1.15, dir), 0.8, 60);
   } else return;
   rebuild(lab);
@@ -292,8 +293,8 @@ export function launchOf(lab: Lab, id: string, k: number, ignoreOwnCut = false):
   let out: Launch | null = null;
   if (e && (ignoreOwnCut || !isCut(lab, id, k))) {
     if (!e.relay) {
-      const launchLocal = e.phase + k * e.period;
-      out = { launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
+      const launchLocal = pulseLocal(e, k);
+      if (Number.isFinite(launchLocal)) out = { launchLocal, launchRoot: lab.tree.toRootTime(e.domain, launchLocal) };
     } else {
       const src = lab.spec.emitters.find((x) => x.id === e.relay?.from);
       const sl = src ? launchOf(lab, src.id, k) : null;
@@ -306,6 +307,17 @@ export function launchOf(lab: Lab, id: string, k: number, ignoreOwnCut = false):
   }
   if (!ignoreOwnCut) lab.launches.set(key, out);
   return out;
+}
+
+// ---------- schedules: a metronome or the zeta zeros ----------
+/** Local launch time of independent pulse k (1-based) of a free-running emitter. Infinity past the zero table. */
+export function pulseLocal(e: EmitterDef, k: number): number {
+  return e.zeta !== undefined ? e.phase + e.zeta * zetaZero(k) : e.phase + k * e.period;
+}
+/** Index of the newest independent pulse launched by local time tl (0 = none yet). */
+export function pulseCount(e: EmitterDef, tl: number): number {
+  if (e.zeta !== undefined) return zeroCountUpTo((tl - e.phase) / e.zeta);
+  return Math.floor((tl - e.phase) / e.period);
 }
 
 /** Root of a relay chain: the free-running emitter that ultimately drives it. */
@@ -325,7 +337,7 @@ export function emissionsUpTo(lab: Lab, tRoot: number, per: number): Emission[] 
   for (const e of lab.spec.emitters) {
     const d = driver(lab, e);
     const tl = lab.tree.toLocalTime(d.domain, tRoot);
-    const kmax = Math.floor((tl - d.phase) / d.period);
+    const kmax = pulseCount(d, tl);
     // a relay lags its driver by flight time + delay: scan back until `per` pulses have actually launched
     const kmin = e.relay ? Math.max(1, kmax - 400) : Math.max(1, kmax - per + 1);
     let n = 0;
@@ -354,6 +366,62 @@ export function emissionsUpTo(lab: Lab, tRoot: number, per: number): Emission[] 
   return out;
 }
 
+// ---------- arithmetic reference (zeta beacons) ----------
+export const hasZeta = (lab: Lab): boolean => lab.spec.emitters.some((e) => e.zeta !== undefined);
+
+/** Switch a free-running emitter between a metronome and the zeta zeros. Relays follow their source and cannot. */
+export function toggleZeta(lab: Lab, id: string): boolean | null {
+  const e = lab.spec.emitters.find((x) => x.id === id);
+  if (!e || e.relay) return null;
+  if (e.zeta !== undefined) delete e.zeta; else e.zeta = 1;
+  rebuild(lab);
+  return e.zeta !== undefined;
+}
+
+export interface ZetaFix {
+  emitter: string;
+  /** consecutive pulses heard, and the true index of the first */
+  heard: number;
+  firstK: number;
+  fix: BeaconFix | null;
+  /** did the blind identification name the right zeros? */
+  identified: boolean;
+  /** sender clock rate estimated from the heard times alone, and the real one (local s per root s) */
+  rateEst: number;
+  rateTrue: number;
+  /** residual as a fraction of the mean gap between heard pulses */
+  deviation: number;
+  verdict: "listening" | "ambiguous" | "baseline" | "bent" | "broken";
+}
+
+/** Blind calibration of a zeta beacon from what the probe has actually heard (default: selected, else first). */
+export function zetaFix(lab: Lab, emitterId?: string): ZetaFix | null {
+  const id = emitterId ?? (lab.sel?.kind === "emitter" && lab.spec.emitters.find((e) => e.id === lab.sel?.id)?.zeta !== undefined
+    ? lab.sel.id : lab.spec.emitters.find((e) => e.zeta !== undefined)?.id);
+  const e = lab.spec.emitters.find((x) => x.id === id);
+  if (!e || e.zeta === undefined) return null;
+  const heard = emissionsUpTo(lab, lab.t, 14).filter((m) => m.emitter === e.id && m.k < FB_BASE)
+    .map((m) => ({ m, a: arrivalAt(lab, m) })).filter((x) => x.a <= lab.t).sort((x, y) => x.m.k - y.m.k);
+  // the longest run of consecutive indices ending at the newest heard pulse
+  const run: typeof heard = [];
+  for (let i = heard.length - 1; i >= 0; i--) {
+    if (run.length > 0 && heard[i].m.k !== run[0].m.k - 1) break;
+    run.unshift(heard[i]);
+  }
+  const dom = lab.tree.get(e.domain);
+  const base: ZetaFix = { emitter: e.id, heard: run.length, firstK: run[0]?.m.k ?? 0, fix: null, identified: false, rateEst: NaN, rateTrue: NaN, deviation: NaN, verdict: "listening" };
+  if (run.length < 5) return base;
+  const fix = calibrateBeacon(run.map((x) => x.a));
+  if (!fix) return base;
+  const mid = run[Math.floor(run.length / 2)].m.launchRoot;
+  const gap = (run[run.length - 1].a - run[0].a) / (run.length - 1);
+  const deviation = fix.residual / gap;
+  const verdict: ZetaFix["verdict"] = fix.confidence < 1.5 ? "ambiguous" : deviation < 0.003 ? "baseline" : deviation < 0.03 ? "bent" : "broken";
+  return {
+    ...base, fix, identified: fix.offset === base.firstK, rateEst: e.zeta / fix.slope, rateTrue: lab.tree.rateToRoot(dom, mid), deviation, verdict,
+  };
+}
+
 // ---------- feedback (cycles of cause and effect) ----------
 const EMPTY_FB: FbResult = { pulses: [], injected: 0, emitted: 0, peak: 0, faded: 0, saturated: false, truncated: false };
 
@@ -371,7 +439,7 @@ function fbGraph(lab: Lab): { nodes: FbNode[]; edges: FbEdge[] } {
 /** Every independent (clock or relay) pulse of `e` that launches by TMAX, cuts honoured. */
 function seedsOf(lab: Lab, e: EmitterDef): FbSeed[] {
   const d = driver(lab, e);
-  const kmax = Math.floor((lab.tree.toLocalTime(d.domain, TMAX) - d.phase) / d.period);
+  const kmax = pulseCount(d, lab.tree.toLocalTime(d.domain, TMAX));
   const out: FbSeed[] = [];
   for (let k = 1; k <= kmax; k++) {
     const L = launchOf(lab, e.id, k);
@@ -443,7 +511,7 @@ function latestPulse(lab: Lab, e: EmitterDef): Emission | null {
   if (got) return got;
   if (e.relay) return null;
   const tl = lab.tree.toLocalTime(e.domain, lab.t);
-  const k = Math.max(1, Math.floor((tl - e.phase) / e.period));
+  const k = Math.max(1, pulseCount(e, tl));
   const L = launchOf(lab, e.id, k);
   return L ? { emitter: e.id, hue: e.hue, k, domain: e.domain, pos: emitterPos(lab, e), launchLocal: L.launchLocal, launchRoot: L.launchRoot } : null;
 }
