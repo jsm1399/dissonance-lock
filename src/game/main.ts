@@ -429,6 +429,7 @@ resize();
   game: () => game,
   save: () => save,
   lab: () => obs.lab(),
+  screen: (p: [number, number]) => obs.toScreen(p),
   openLab,
 };
 if (location.hash.startsWith("#w=")) {

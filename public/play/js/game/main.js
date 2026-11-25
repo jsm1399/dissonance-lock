@@ -507,6 +507,7 @@ window.__dl = {
     game: () => game,
     save: () => save,
     lab: () => obs.lab(),
+    screen: (p) => obs.toScreen(p),
     openLab,
 };
 if (location.hash.startsWith("#w=")) {

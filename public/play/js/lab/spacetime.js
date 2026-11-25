@@ -16,8 +16,8 @@ export function spacetime(lab, per = PER, margin = MARGIN, window = WINDOW) {
         return {
             emitter: em.emitter, hue: em.hue, k: em.k, domain: em.domain, pos: em.pos, launchLocal: em.launchLocal,
             dist: dist.get(em.emitter) ?? 0,
-            launch: em.launchRoot, arrival, heard: arrival <= lab.t, inverted: false,
-            cause: lab.spec.emitters.find((e) => e.id === em.emitter)?.relay ? `${lab.spec.emitters.find((e) => e.id === em.emitter)?.relay?.from}|${em.k}` : null,
+            launch: em.launchRoot, arrival, heard: arrival <= lab.t, inverted: false, amp: em.amp ?? 1,
+            cause: em.cause ?? (lab.spec.emitters.find((e) => e.id === em.emitter)?.relay ? `${lab.spec.emitters.find((e) => e.id === em.emitter)?.relay?.from}|${em.k}` : null),
         };
     });
     const live = lines.filter((l) => l.heard && l.arrival >= lab.t - window);

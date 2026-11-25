@@ -1,15 +1,15 @@
 import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
-import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addRelay, adjust, clearCuts, emitterPos, setDepth, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, isEcho, removeFeedback, setDepth, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
-    { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "erase", label: "ERASE" },
+    { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 150;
+const BOT_H = 166;
 const LAW_HOTKEY = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
 const LAW_TITLE = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
 const lawValue = (k, L) => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
@@ -26,6 +26,8 @@ export function createObservatory(hooks) {
     let toast = null;
     let lastRev = -1;
     let view = "map";
+    /** LOOP tool: emitter whose pulses the next click will tap */
+    let loopFrom = null;
     const wf = new Map();
     const say = (t, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
     function layout(ctx, w, h) {
@@ -117,6 +119,8 @@ export function createObservatory(hooks) {
                 const c = causalCone(l, spacetime(l), l.sel.id, l.t - 0.3 * SPAN);
                 if (!c)
                     say("no pulse to cut yet");
+                else if (isEcho(c.origin.k))
+                    say("that pulse is an echo: cut the pulse that caused it");
                 else {
                     toggleCut(l, c.origin.emitter, c.origin.k);
                     wf.clear();
@@ -187,6 +191,28 @@ export function createObservatory(hooks) {
                 }
                 else
                     say("emitter limit reached");
+            }
+        }
+        else if (l.tool === "loop") {
+            const hit = hitTest(l, p);
+            if (hit?.kind !== "emitter") {
+                loopFrom = null;
+                say("loop cancelled: click an emitter");
+            }
+            else if (loopFrom === null) {
+                loopFrom = hit.id;
+                l.sel = hit;
+                say(`tap ${hit.id}: now click the emitter that re-emits it (same one = self-echo)`);
+            }
+            else {
+                const src = loopFrom;
+                loopFrom = null;
+                if (addFeedback(l, src, hit.id)) {
+                    l.sel = hit;
+                    l.tool = "select";
+                    wf.clear();
+                    say(`${hit.id} re-emits ${src}  (Q/W gain · E/R delay)`);
+                }
             }
         }
         else if (l.tool === "emit") {
@@ -291,7 +317,7 @@ export function createObservatory(hooks) {
                     c.moveTo(X(sg[0]), Y(sg[1]));
                     c.lineTo(X(sg[2]), Y(sg[3]));
                 }
-                c.strokeStyle = hsl(em.hue, 80, 62, Math.max(0.1, 0.75 - age / 55));
+                c.strokeStyle = hsl(em.hue, 80, 62, Math.max(0.1, 0.75 - age / 55) * Math.min(1, 0.3 + 0.7 * (em.amp ?? 1)));
                 c.lineWidth = 1.5;
                 c.stroke();
                 continue;
@@ -311,7 +337,7 @@ export function createObservatory(hooks) {
             c.beginPath();
             c0.poly.forEach((q, i) => (i === 0 ? c.moveTo(X(q[0]), Y(q[1])) : c.lineTo(X(q[0]), Y(q[1]))));
             c.closePath();
-            c.strokeStyle = hsl(em.hue, 80, 62, Math.max(0.1, 0.75 - age / 55));
+            c.strokeStyle = hsl(em.hue, 80, 62, Math.max(0.1, 0.75 - age / 55) * Math.min(1, 0.3 + 0.7 * (em.amp ?? 1)));
             c.lineWidth = 1.5;
             c.stroke();
         }
@@ -334,6 +360,51 @@ export function createObservatory(hooks) {
             c.lineTo(X(b[0]), Y(b[1]));
             c.stroke();
             c.setLineDash([]);
+        }
+        // feedback taps: from -> re-emitter, curved; a self-echo is a loop on the emitter
+        for (const e of l.spec.emitters) {
+            if (!e.fb)
+                continue;
+            const src = l.spec.emitters.find((q) => q.id === e.fb?.from);
+            if (!src)
+                continue;
+            const a = l.tree.toRootPos(src.domain, emitterPos(l, src)), b = l.tree.toRootPos(e.domain, emitterPos(l, e));
+            const g = e.fb.gain, col = g > 1.005 ? "#ff4d6d" : g > 0.995 ? "#ffb454" : "#7fdbca";
+            c.strokeStyle = col;
+            c.fillStyle = col;
+            c.lineWidth = 1.4;
+            c.setLineDash([5, 3]);
+            let lx, ly;
+            if (src === e) {
+                const cx = X(a[0]) + 3.4 * s, cy = Y(a[1]) - 3.4 * s;
+                c.beginPath();
+                c.arc(cx, cy, 3 * s, 0, Math.PI * 2);
+                c.stroke();
+                lx = cx + 3.4 * s;
+                ly = cy;
+            }
+            else {
+                const ax = X(a[0]), ay = Y(a[1]), bx = X(b[0]), by = Y(b[1]);
+                const mx = (ax + bx) / 2, my = (ay + by) / 2, nx = -(by - ay), ny = bx - ax, nl = Math.hypot(nx, ny) || 1;
+                const qx = mx + (nx / nl) * 6 * s, qy = my + (ny / nl) * 6 * s;
+                c.beginPath();
+                c.moveTo(ax, ay);
+                c.quadraticCurveTo(qx, qy, bx, by);
+                c.stroke();
+                c.setLineDash([]);
+                const tx = bx - qx, ty = by - qy, tl = Math.hypot(tx, ty) || 1, ux = tx / tl, uy = ty / tl, hx = bx - ux * 2.2 * s, hy = by - uy * 2.2 * s;
+                c.beginPath();
+                c.moveTo(hx, hy);
+                c.lineTo(hx - ux * 6 - uy * 3.5, hy - uy * 6 + ux * 3.5);
+                c.lineTo(hx - ux * 6 + uy * 3.5, hy - uy * 6 - ux * 3.5);
+                c.closePath();
+                c.fill();
+                lx = (ax + 2 * qx + bx) / 4;
+                ly = (ay + 2 * qy + by) / 4;
+            }
+            c.setLineDash([]);
+            c.lineWidth = 1;
+            text(c, `×${g.toFixed(2)}`, lx, ly, 10, col, "center", "700");
         }
         // emitters
         for (const e of l.spec.emitters) {
@@ -506,7 +577,7 @@ export function createObservatory(hooks) {
         }
         for (const ln of st.lines) {
             const rel = cone?.rel.get(ln);
-            c.globalAlpha = rel === "independent" ? 0.3 : 1;
+            c.globalAlpha = (rel === "independent" ? 0.3 : 1) * Math.min(1, 0.35 + 0.65 * ln.amp);
             const x0 = X(ln.dist), y0 = T(ln.launch), x1 = X(0), y1 = T(ln.arrival);
             c.strokeStyle = hsl(ln.hue, 70, 55, 0.22);
             c.lineWidth = 1;
@@ -688,7 +759,26 @@ export function createObservatory(hooks) {
             text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
             text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
         }
-        let info = "Click the world to move the probe. Pick a tool to build. Keys 1-7 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
+        if (hasFeedback(l)) {
+            const fa = feedbackAudit(l), fr = feedbackOf(l).result, w0 = fa.worst;
+            let msg, col;
+            if (!w0) {
+                msg = `no cycle · ${fr.pulses.length} echoes${fa.amplifier ? " · fan-out creates energy" : ""}`;
+                col = fa.amplifier ? "#ffb454" : "rgba(127,219,202,0.95)";
+            }
+            else {
+                const v = w0.verdict;
+                const tail = v === "runaway" ? `RUNAWAY +${w0.rate.toFixed(3)}/s · doubles every ${(Math.LN2 / w0.rate).toFixed(1)}s`
+                    : v === "zeno" ? `ZENO: round trip ${w0.minDelay.toFixed(3)}s · unbounded echoes`
+                        : v === "marginal" ? "marginal · rings forever"
+                            : `damped ${w0.rate.toFixed(3)}/s · halves every ${(Math.LN2 / -w0.rate).toFixed(1)}s`;
+                msg = `${w0.path.join("→")} · round ${w0.minDelay.toFixed(1)}s · gain/round ${w0.gain.toFixed(2)} · ${tail}${fr.saturated ? " · SATURATED" : ""}${fr.truncated ? " · cascade capped" : ""}${fa.amplifier ? " · ✗ energy created" : ""}`;
+                col = v === "damped" ? "rgba(127,219,202,0.95)" : v === "marginal" ? "#ffb454" : "#ff4d6d";
+            }
+            text(c, "LOOPS", 14, botTop + 110, 10, "rgba(180,200,220,0.6)");
+            text(c, msg, 64, botTop + 110, 11, col);
+        }
+        let info = "Click the world to move the probe. Pick a tool to build. Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
         if (l.sel?.kind === "domain") {
             const d = l.spec.domains.find((q) => q.id === l.sel?.id);
             if (d)
@@ -696,7 +786,9 @@ export function createObservatory(hooks) {
         }
         else if (l.sel?.kind === "emitter") {
             const e = l.spec.emitters.find((q) => q.id === l.sel?.id);
-            if (e)
+            if (e && e.fb)
+                info = `${e.id} · re-emits ${e.fb.from} +${e.fb.delay.toFixed(1)} ×${e.fb.gain.toFixed(2)}   Q/W gain · E/R delay · Y remove loop · K cut pulse · Del`;
+            else if (e)
                 info = e.relay
                     ? `${e.id} · relay of ${e.relay.from} +${e.relay.delay.toFixed(1)} (own clock) · in ${e.domain}   - = delay · K cut pulse · H heat · Del`
                     : `${e.id} · period ${e.period.toFixed(1)} (own clock) · in ${e.domain}   - = period · K cut pulse · H heat · Del`;
@@ -707,7 +799,7 @@ export function createObservatory(hooks) {
         c.font = `400 10px ${FONT}`;
         const maxW = w - 28;
         const words = info.split(" ");
-        let line = "", ly = botTop + 120, lines = 0;
+        let line = "", ly = botTop + 132, lines = 0;
         for (const wd of words) {
             const test = line ? `${line} ${wd}` : wd;
             if (c.measureText(test).width > maxW && line && lines < 1) {
@@ -731,9 +823,11 @@ export function createObservatory(hooks) {
     }
     return {
         isOpen: () => lab !== null,
+        toScreen: (p) => [geo.x0 + p[0] * geo.s, geo.y0 + p[1] * geo.s],
         lab: () => lab,
         view: () => view,
         open(spec) {
+            loopFrom = null;
             lab = newLab(spec ?? defaultWorld());
             lastRev = -1;
             view = "map";
@@ -804,6 +898,22 @@ export function createObservatory(hooks) {
                     setDepth(l, sel, shift ? -4 : 4);
                     wf.clear();
                     say(`${sel.id} depth ${sel.kind === "probe" ? l.probeZ : (l.spec.emitters.find((q) => q.id === sel.id)?.z ?? 0)}`);
+                    return true;
+                }
+                case "q":
+                case "w":
+                case "e":
+                case "r":
+                case "y": {
+                    const sl = l.sel;
+                    if (sl?.kind !== "emitter")
+                        return false;
+                    const ok = k === "y" ? removeFeedback(l, sl.id)
+                        : adjustFeedback(l, sl.id, k === "q" || k === "w" ? "gain" : "delay", k === "w" || k === "r" ? 1 : -1);
+                    if (!ok)
+                        say("select an emitter with a feedback loop (LOOP tool)");
+                    else
+                        wf.clear();
                     return true;
                 }
                 case "k":

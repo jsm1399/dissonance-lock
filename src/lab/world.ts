@@ -27,6 +27,11 @@ export interface EmitterDef {
   hue: number;
   /** Relay: instead of its own clock it re-emits (after `delay` of its own local time) each pulse it hears from `from`. */
   relay?: { from: string; delay: number };
+  /**
+   * Feedback tap: whatever this emitter does, it ALSO re-emits every pulse it hears from `from` (any emitter,
+   * itself included) after `delay` of its own local time, amplitude x `gain`. Taps may form cycles.
+   */
+  fb?: { from: string; delay: number; gain: number };
   /** Height off the plane in the hidden third dimension (domain-local units). Only meaningful when the world is bulk. */
   z?: number;
 }
@@ -49,7 +54,7 @@ export interface WorldSpec {
 
 export const lawsOf = (spec: WorldSpec): Laws => spec.laws ?? LAWFUL;
 
-export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24 };
+export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4 };
 
 const fin = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 const pair = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
@@ -103,6 +108,13 @@ export function validate(spec: WorldSpec): string[] {
     let x: EmitterDef | undefined = e, n = 0;
     while (x && x.relay && n++ <= spec.emitters.length) x = byId.get(x.relay.from);
     if (n > spec.emitters.length) errs.push(`emitter ${e.id}: relay cycle`);
+  }
+  for (const e of spec.emitters) {
+    if (e.fb === undefined) continue;
+    const f = e.fb;
+    if (!f || typeof f !== "object" || typeof f.from !== "string" || !fin(f.delay) || f.delay < 0 || f.delay > LIMITS.fbDelay
+      || !fin(f.gain) || f.gain <= 0 || f.gain > LIMITS.fbGain) errs.push(`emitter ${e.id}: bad feedback`);
+    else if (!byId.has(f.from)) errs.push(`emitter ${e.id}: feedback source ${f.from} unknown`);
   }
   if (spec.cuts !== undefined) {
     if (!Array.isArray(spec.cuts) || spec.cuts.length > LIMITS.cuts) errs.push("bad or too many cuts");
@@ -170,6 +182,7 @@ export function parseWorld(raw: unknown): WorldSpec | null {
       emitters: j.emitters.map((e) => ({
         id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
         ...(e.z === undefined ? {} : { z: e.z }),
+        ...(e.fb === undefined ? {} : { fb: e.fb && typeof e.fb === "object" ? { from: String((e.fb as { from: unknown }).from), delay: (e.fb as { delay: number }).delay, gain: (e.fb as { gain: number }).gain } : (e.fb as never) }),
         ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String((e.relay as { from: unknown }).from), delay: (e.relay as { delay: number }).delay } : (e.relay as never) }),
       })),
       ...(isLawful(laws) ? {} : { laws }),
@@ -212,6 +225,7 @@ export function encodeWorld(spec: WorldSpec): string {
       ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
       ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
       ...(e.z !== undefined ? { z: r2(e.z) } : {}),
+      ...(e.fb ? { fb: { from: e.fb.from, delay: r2(e.fb.delay), gain: r2(e.fb.gain) } } : {}),
     })),
     ...(spec.bulk ? { bulk: true as const } : {}),
     ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),

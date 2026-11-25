@@ -1,4 +1,4 @@
-const CACHE = "dissonance-lock-v1.7";
+const CACHE = "dissonance-lock-v1.8";
 const ASSETS = [
   "./",
   "./index.html",
@@ -10,6 +10,7 @@ const ASSETS = [
   "./js/core/strata/clock.js",
   "./js/core/strata/dissonance.js",
   "./js/core/strata/fermat.js",
+  "./js/core/strata/feedback.js",
   "./js/core/strata/index.js",
   "./js/core/strata/ledger.js",
   "./js/core/strata/propagate.js",

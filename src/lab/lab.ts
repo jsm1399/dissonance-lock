@@ -1,5 +1,5 @@
-import { arrivalField, countInversions, fermatField, lagSpread, march, sampleField } from "../core/strata/index.js";
-import type { Arrival, ArrivalField, StrataTree, Vec } from "../core/strata/index.js";
+import { FB_BASE, analyzeFeedback, arrivalField, countInversions, fermatField, lagSpread, march, runFeedback, sampleField } from "../core/strata/index.js";
+import type { Arrival, ArrivalField, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
 import type { Laws, RayAudit } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
@@ -11,7 +11,7 @@ export const TMAX = 240;
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 const MARCH = { maxStep: 1 };
 
-export type Tool = "select" | "fast" | "well" | "micro" | "emit" | "relay" | "erase";
+export type Tool = "select" | "fast" | "well" | "micro" | "emit" | "relay" | "loop" | "erase";
 export interface Sel { kind: "domain" | "emitter" | "probe"; id: string }
 
 export interface Emission {
@@ -23,6 +23,10 @@ export interface Emission {
   pos: Vec;
   launchLocal: number;
   launchRoot: number;
+  /** strength relative to an independent pulse (feedback echoes only) */
+  amp?: number;
+  /** "emitter|k" of the pulse that caused this echo (feedback echoes only) */
+  cause?: string;
 }
 
 export interface Perceived { emission: Emission; arrival: number; lag: number }
@@ -53,7 +57,14 @@ export interface Lab {
   pending: number;
   /** launch times per pulse ("emitter|k"), null = never happens (cut or caused by a cut); valid for the current rev */
   launches: Map<string, Launch | null>;
+  /** feedback cascade of the current rev (null = not computed yet) */
+  fb: FbCache | null;
+  /** stability audit of the feedback graph, keyed by rev and scrub time */
+  fbAudit: { key: string; value: FbAudit } | null;
 }
+
+export interface FbCache { result: FbResult; byNode: Map<string, FbEcho[]>; byKey: Map<string, FbEcho> }
+export type FbEcho = FbPulse;
 
 export interface Launch { launchLocal: number; launchRoot: number }
 
@@ -68,7 +79,7 @@ export function newLab(spec: WorldSpec = defaultWorld()): Lab {
   }
   return {
     spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, sel: null, tool: "select",
-    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(),
+    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null,
   };
 }
 
@@ -125,6 +136,8 @@ export function rebuild(lab: Lab): void {
   lab.fields.clear();
   lab.bent.clear();
   lab.launches.clear();
+  lab.fb = null;
+  lab.fbAudit = null;
   lab.rev++;
 }
 
@@ -213,6 +226,7 @@ function pruneEmitters(lab: Lab, dead: Set<string>): void {
     for (const e of lab.spec.emitters) if (!dead.has(e.id) && e.relay && dead.has(e.relay.from)) { dead.add(e.id); grew = true; }
   }
   lab.spec.emitters = lab.spec.emitters.filter((e) => !dead.has(e.id));
+  for (const e of lab.spec.emitters) if (e.fb && dead.has(e.fb.from)) delete e.fb;
   if (lab.spec.cuts) {
     lab.spec.cuts = lab.spec.cuts.filter((c) => !dead.has(c.emitter));
     if (lab.spec.cuts.length === 0) delete lab.spec.cuts;
@@ -265,6 +279,10 @@ export const isCut = (lab: Lab, id: string, k: number): boolean => !!lab.spec.cu
  * caused, never happen (null). `ignoreOwnCut` gives the nominal time of a cut pulse (for drawing the cut).
  */
 export function launchOf(lab: Lab, id: string, k: number, ignoreOwnCut = false): Launch | null {
+  if (k >= FB_BASE) {
+    const p = feedbackOf(lab).byKey.get(cutKey(id, k));
+    return p ? { launchLocal: p.launchLocal, launchRoot: p.launchRoot } : null;
+  }
   const key = cutKey(id, k);
   if (!ignoreOwnCut) {
     const hit = lab.launches.get(key);
@@ -318,7 +336,105 @@ export function emissionsUpTo(lab: Lab, tRoot: number, per: number): Emission[] 
       out.push({ emitter: e.id, hue: e.hue, k, domain: e.domain, pos: emitterPos(lab, e), launchLocal: L.launchLocal, launchRoot: L.launchRoot });
     }
   }
+  // feedback echoes: the newest `per` of each emitter that have launched by tRoot
+  const fb = feedbackOf(lab);
+  if (fb.result.pulses.length > 0) {
+    for (const e of lab.spec.emitters) {
+      const list = fb.byNode.get(e.id);
+      if (!list) continue;
+      let n = 0;
+      for (let i = list.length - 1; i >= 0 && n < per; i--) {
+        const p = list[i];
+        if (p.launchRoot > tRoot) continue;
+        n++;
+        out.push({ emitter: e.id, hue: e.hue, k: p.k, domain: e.domain, pos: emitterPos(lab, e), launchLocal: p.launchLocal, launchRoot: p.launchRoot, amp: p.amp, cause: p.cause });
+      }
+    }
+  }
   return out;
+}
+
+// ---------- feedback (cycles of cause and effect) ----------
+const EMPTY_FB: FbResult = { pulses: [], injected: 0, emitted: 0, peak: 0, faded: 0, saturated: false, truncated: false };
+
+export const hasFeedback = (lab: Lab): boolean => lab.spec.emitters.some((e) => e.fb !== undefined);
+/** Pulses that are not echoes (clock pulses, relay pulses) can be cut; echoes are effects, so cut their cause. */
+export const isEcho = (k: number): boolean => k >= FB_BASE;
+
+function fbGraph(lab: Lab): { nodes: FbNode[]; edges: FbEdge[] } {
+  const nodes: FbNode[] = lab.spec.emitters.map((e) => ({ id: e.id, site: { domain: e.domain, pos: emitterPos(lab, e) } }));
+  const edges: FbEdge[] = [];
+  for (const e of lab.spec.emitters) if (e.fb) edges.push({ from: e.fb.from, to: e.id, delay: e.fb.delay, gain: e.fb.gain });
+  return { nodes, edges };
+}
+
+/** Every independent (clock or relay) pulse of `e` that launches by TMAX, cuts honoured. */
+function seedsOf(lab: Lab, e: EmitterDef): FbSeed[] {
+  const d = driver(lab, e);
+  const kmax = Math.floor((lab.tree.toLocalTime(d.domain, TMAX) - d.phase) / d.period);
+  const out: FbSeed[] = [];
+  for (let k = 1; k <= kmax; k++) {
+    const L = launchOf(lab, e.id, k);
+    if (L && L.launchRoot <= TMAX) out.push({ node: e.id, key: cutKey(e.id, k), launchLocal: L.launchLocal, launchRoot: L.launchRoot });
+  }
+  return out;
+}
+
+/** The full echo cascade of the world (event-driven, deterministic), cached per rev. */
+export function feedbackOf(lab: Lab): FbCache {
+  if (lab.fb) return lab.fb;
+  let cache: FbCache = { result: EMPTY_FB, byNode: new Map(), byKey: new Map() };
+  if (hasFeedback(lab)) {
+    const { nodes, edges } = fbGraph(lab);
+    const from = new Set(edges.map((x) => x.from));
+    const seeds = lab.spec.emitters.filter((e) => from.has(e.id)).flatMap((e) => seedsOf(lab, e));
+    const result = runFeedback(lab.tree, nodes, edges, seeds, { horizon: TMAX, loss: lawsOf(lab.spec).loss, march: MARCH });
+    const byNode = new Map<string, FbEcho[]>(), byKey = new Map<string, FbEcho>();
+    for (const p of result.pulses) {
+      byKey.set(p.key, p);
+      const l = byNode.get(p.node);
+      if (l) l.push(p); else byNode.set(p.node, [p]);
+    }
+    cache = { result, byNode, byKey };
+  }
+  lab.fb = cache;
+  return cache;
+}
+
+/** Stability of the feedback graph at the current scrub time (clock drift makes timing a snapshot). */
+export function feedbackAudit(lab: Lab): FbAudit {
+  const key = `${lab.rev}|${Math.round(lab.t * 2)}`;
+  if (lab.fbAudit && lab.fbAudit.key === key) return lab.fbAudit.value;
+  const { nodes, edges } = fbGraph(lab);
+  const value = analyzeFeedback(lab.tree, nodes, edges, lab.t, lawsOf(lab.spec).loss, MARCH);
+  lab.fbAudit = { key, value };
+  return value;
+}
+
+/** Give emitter `toId` a feedback tap on `fromId` (replacing any it had). `toId` may equal `fromId`. */
+export function addFeedback(lab: Lab, fromId: string, toId: string, delay = 1.5, gain = 0.8): boolean {
+  const from = lab.spec.emitters.find((e) => e.id === fromId), to = lab.spec.emitters.find((e) => e.id === toId);
+  if (!from || !to) return false;
+  to.fb = { from: fromId, delay: clamp(delay, 0, LIMITS.fbDelay), gain: clamp(gain, 0.05, LIMITS.fbGain) };
+  rebuild(lab);
+  return true;
+}
+
+export function removeFeedback(lab: Lab, toId: string): boolean {
+  const to = lab.spec.emitters.find((e) => e.id === toId);
+  if (!to || !to.fb) return false;
+  delete to.fb;
+  rebuild(lab);
+  return true;
+}
+
+export function adjustFeedback(lab: Lab, toId: string, what: "gain" | "delay", dir: 1 | -1): boolean {
+  const to = lab.spec.emitters.find((e) => e.id === toId);
+  if (!to || !to.fb) return false;
+  if (what === "gain") to.fb.gain = clamp(Math.round(to.fb.gain * Math.pow(1.08, dir) * 1000) / 1000, 0.05, LIMITS.fbGain);
+  else to.fb.delay = clamp(Math.round(Math.max(0.1, to.fb.delay) * Math.pow(1.2, dir) * 1000) / 1000, 0, LIMITS.fbDelay);
+  rebuild(lab);
+  return true;
 }
 
 /** The newest pulse of an emitter that has launched by lab.t (or its first pulse if none yet). */

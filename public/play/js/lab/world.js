@@ -1,7 +1,7 @@
 import { StrataTree } from "../core/strata/index.js";
 import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
 export const lawsOf = (spec) => spec.laws ?? LAWFUL;
-export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24 };
+export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4 };
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
 const pair = (x) => Array.isArray(x) && x.length === 2 && fin(x[0]) && fin(x[1]);
 /** Human-readable problems; empty array = valid. Parents must precede children. */
@@ -81,6 +81,16 @@ export function validate(spec) {
         if (n > spec.emitters.length)
             errs.push(`emitter ${e.id}: relay cycle`);
     }
+    for (const e of spec.emitters) {
+        if (e.fb === undefined)
+            continue;
+        const f = e.fb;
+        if (!f || typeof f !== "object" || typeof f.from !== "string" || !fin(f.delay) || f.delay < 0 || f.delay > LIMITS.fbDelay
+            || !fin(f.gain) || f.gain <= 0 || f.gain > LIMITS.fbGain)
+            errs.push(`emitter ${e.id}: bad feedback`);
+        else if (!byId.has(f.from))
+            errs.push(`emitter ${e.id}: feedback source ${f.from} unknown`);
+    }
     if (spec.cuts !== undefined) {
         if (!Array.isArray(spec.cuts) || spec.cuts.length > LIMITS.cuts)
             errs.push("bad or too many cuts");
@@ -151,6 +161,7 @@ export function parseWorld(raw) {
             emitters: j.emitters.map((e) => ({
                 id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
                 ...(e.z === undefined ? {} : { z: e.z }),
+                ...(e.fb === undefined ? {} : { fb: e.fb && typeof e.fb === "object" ? { from: String(e.fb.from), delay: e.fb.delay, gain: e.fb.gain } : e.fb }),
                 ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String(e.relay.from), delay: e.relay.delay } : e.relay }),
             })),
             ...(isLawful(laws) ? {} : { laws }),
@@ -194,6 +205,7 @@ export function encodeWorld(spec) {
             ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
             ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
             ...(e.z !== undefined ? { z: r2(e.z) } : {}),
+            ...(e.fb ? { fb: { from: e.fb.from, delay: r2(e.fb.delay), gain: r2(e.fb.gain) } } : {}),
         })),
         ...(spec.bulk ? { bulk: true } : {}),
         ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),
