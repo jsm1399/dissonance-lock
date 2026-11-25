@@ -12,6 +12,7 @@ import type { MenuItem, Rect, Ui, View } from "./render.js";
 import { sfx } from "./sfx.js";
 import { BRIEFS, driftBrief } from "./lore.js";
 import { createObservatory } from "../lab/observatory.js";
+import { TRIALS } from "../lab/trials.js";
 import { decodeWorld, encodeWorld, parseWorld } from "../lab/world.js";
 import type { WorldSpec } from "../lab/world.js";
 
@@ -52,6 +53,11 @@ const obs = createObservatory({
     try { history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
     toMenu();
   },
+  onTrial(id) {
+    if (!save.trials.includes(id)) { save.trials.push(id); writeSave(); }
+    sfx.win();
+  },
+  cleared: () => save.trials,
   link: labLink,
   copy: async (text) => {
     try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
@@ -66,6 +72,16 @@ function openLab(spec?: WorldSpec): void {
   tutor = null;
   ui.hint = null;
   obs.open(w);
+  ui.screen = "lab";
+  sfx.unlock();
+}
+
+function openTrials(): void {
+  const first = TRIALS.findIndex((t) => !save.trials.includes(t.id));
+  game = null;
+  tutor = null;
+  ui.hint = null;
+  obs.openTrial(first < 0 ? 0 : first);
   ui.screen = "lab";
   sfx.unlock();
 }
@@ -94,6 +110,11 @@ function buildMenu(): MenuItem[] {
     { key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
       right: save.driftBest > 0 ? `best ${save.driftBest}` : "—" },
     () => startDrift(false),
+  );
+  add(
+    { key: "T", title: "Calibration Trials", blurb: "repair broken worlds with the Observatory's instruments · loops · clocks · energy",
+      right: `${save.trials.filter((id) => TRIALS.some((t) => t.id === id)).length}/${TRIALS.length}` },
+    () => openTrials(),
   );
   add(
     { key: "O", title: "Observatory", blurb: "build strata · scrub time · probe causality · share by link", right: "sandbox" },
@@ -431,6 +452,8 @@ resize();
   lab: () => obs.lab(),
   screen: (p: [number, number]) => obs.toScreen(p),
   openLab,
+  openTrials,
+  trial: () => obs.trialIdx(),
 };
 if (location.hash.startsWith("#w=")) {
   const shared = decodeWorld(location.hash.slice(3));

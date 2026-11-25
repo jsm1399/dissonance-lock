@@ -1,10 +1,11 @@
 import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
-import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
+import { TRIALS } from "./trials.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
     { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
@@ -28,6 +29,9 @@ export function createObservatory(hooks) {
     let view = "map";
     /** LOOP tool: emitter whose pulses the next click will tap */
     let loopFrom = null;
+    /** Calibration Trial in progress: the goal must hold for HOLD seconds */
+    let trial = null;
+    const HOLD = 1;
     const wf = new Map();
     const say = (t, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
     function layout(ctx, w, h) {
@@ -79,6 +83,19 @@ export function createObservatory(hooks) {
     }
     const toWorld = (px, py) => [(px - geo.x0) / geo.s, (py - geo.y0) / geo.s];
     const inWorld = (p) => p[0] >= 0 && p[0] <= SIZE && p[1] >= 0 && p[1] <= SIZE;
+    function startTrial(idx) {
+        const n = TRIALS.length, i = ((idx % n) + n) % n, t = TRIALS[i];
+        lab = newLab(t.world());
+        lab.t = t.t;
+        lastRev = -1;
+        view = "map";
+        drag = null;
+        scrubbing = false;
+        loopFrom = null;
+        toast = null;
+        wf.clear();
+        trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" } };
+    }
     function activate(id) {
         const l = lab;
         if (id === "play") {
@@ -102,6 +119,11 @@ export function createObservatory(hooks) {
         }
         else if (id === "reset") {
             const keepTool = l.tool;
+            if (trial) {
+                startTrial(trial.idx);
+                say("trial reset");
+                return;
+            }
             lab = newLab(defaultWorld());
             lab.tool = keepTool;
             wf.clear();
@@ -701,6 +723,42 @@ export function createObservatory(hooks) {
         c.strokeStyle = "rgba(255,255,255,0.25)";
         c.strokeRect(R.x + 0.5, R.y + 0.5, R.w - 1, R.h - 1);
     }
+    function drawTrial(c, now) {
+        if (!trial)
+            return;
+        const t = TRIALS[trial.idx], { x0, y0, s } = geo;
+        const wv = Math.min(SIZE * s - 12, 560), x = x0 + 6, hh = 62, y = y0 + SIZE * s - hh - 6;
+        const cleared = trial.done || (hooks.cleared?.().includes(t.id) ?? false);
+        c.fillStyle = "rgba(3,5,9,0.88)";
+        c.fillRect(x, y, wv, hh);
+        const col = trial.done ? "#7fdbca" : "#ffb454";
+        c.strokeStyle = col;
+        c.strokeRect(x + 0.5, y + 0.5, wv - 1, hh - 1);
+        text(c, `TRIAL ${trial.idx + 1}/${TRIALS.length} · ${t.name.toUpperCase()}${cleared ? "  ✓" : ""}`, x + 10, y + 14, 12, col, "left", "700");
+        c.font = `400 10px ${FONT}`;
+        const words = t.brief.split(" ");
+        let line = "", ly = y + 29, n = 0;
+        for (const wd of words) {
+            const test = line ? `${line} ${wd}` : wd;
+            if (c.measureText(test).width > wv - 20 && line && n < 1) {
+                text(c, line, x + 10, ly, 10, "rgba(220,230,245,0.9)");
+                line = wd;
+                ly += 12;
+                n++;
+            }
+            else
+                line = test;
+        }
+        if (line)
+            text(c, line, x + 10, ly, 10, "rgba(220,230,245,0.9)");
+        const st = trial.done ? "✓ CLEARED · Tab: next trial" : trial.res.status;
+        text(c, st, x + 10, y + hh - 9, 10, trial.res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
+        if (!trial.done && trial.held > 0) {
+            c.fillStyle = "#7fdbca";
+            c.fillRect(x, y + hh - 3, wv * Math.min(1, trial.held / HOLD), 2);
+        }
+        void now;
+    }
     function drawToolbar(c, l) {
         for (const b of btns) {
             const isLaw = b.id.startsWith("law:");
@@ -808,7 +866,7 @@ export function createObservatory(hooks) {
         if (l.sel?.kind === "domain") {
             const d = l.spec.domains.find((q) => q.id === l.sel?.id);
             if (d)
-                info = `${d.id} · ${d.shearMin !== null ? "shear well" : "clock domain"} · size ${d.extent.toFixed(1)} · rate ${d.rate.toFixed(2)} · drifts ${d.changes.length}   [ ] size · - = rate · , . drift at t · Del`;
+                info = `${d.id} · ${d.shearMin !== null ? "shear well" : "clock domain"} · size ${d.extent.toFixed(1)} · rate ${d.rate.toFixed(2)} · drifts ${d.changes.length}   [ ] size · - = rate · , . drift at t · C flatten clock · Del`;
         }
         else if (l.sel?.kind === "emitter") {
             const e = l.spec.emitters.find((q) => q.id === l.sel?.id);
@@ -843,9 +901,10 @@ export function createObservatory(hooks) {
         if (toast && now < toast.until) {
             c.font = `700 12px ${FONT}`;
             const tw = c.measureText(toast.text).width + 28;
+            const ty = botTop - 34 - (trial ? 74 : 0);
             c.fillStyle = "rgba(127,219,202,0.92)";
-            c.fillRect(w / 2 - tw / 2, botTop - 34, tw, 26);
-            text(c, toast.text, w / 2, botTop - 20, 12, "#05070b", "center", "700");
+            c.fillRect(w / 2 - tw / 2, ty, tw, 26);
+            text(c, toast.text, w / 2, ty + 14, 12, "#05070b", "center", "700");
         }
     }
     return {
@@ -853,7 +912,10 @@ export function createObservatory(hooks) {
         toScreen: (p) => [geo.x0 + p[0] * geo.s, geo.y0 + p[1] * geo.s],
         lab: () => lab,
         view: () => view,
+        openTrial(idx) { startTrial(idx); },
+        trialIdx: () => (trial ? trial.idx : null),
         open(spec) {
+            trial = null;
             loopFrom = null;
             lab = newLab(spec ?? defaultWorld());
             lastRev = -1;
@@ -862,7 +924,7 @@ export function createObservatory(hooks) {
             scrubbing = false;
             wf.clear();
         },
-        close() { lab = null; drag = null; scrubbing = false; wf.clear(); },
+        close() { trial = null; lab = null; drag = null; scrubbing = false; wf.clear(); },
         draw(ctx, w, h, now, dt) {
             if (!lab)
                 return;
@@ -875,7 +937,17 @@ export function createObservatory(hooks) {
             }
             if (lab.rev !== lastRev) {
                 lastRev = lab.rev;
-                hooks.onChange(lab.spec);
+                if (!trial)
+                    hooks.onChange(lab.spec);
+            }
+            if (trial) {
+                trial.res = TRIALS[trial.idx].check(lab);
+                trial.held = trial.res.ok ? trial.held + dt : 0;
+                if (!trial.done && trial.held >= HOLD) {
+                    trial.done = true;
+                    say("TRIAL CLEARED");
+                    hooks.onTrial?.(TRIALS[trial.idx].id);
+                }
             }
             pumpFields(lab);
             layout(ctx, w, h);
@@ -884,6 +956,8 @@ export function createObservatory(hooks) {
             if (view === "st")
                 drawSpacetime(ctx, lab);
             drawWorld(ctx, lab, now);
+            if (trial)
+                drawTrial(ctx, now);
             drawToolbar(ctx, lab);
             drawBottom(ctx, lab, now);
         },
@@ -941,6 +1015,24 @@ export function createObservatory(hooks) {
                         say("select an emitter with a feedback loop (LOOP tool)");
                     else
                         wf.clear();
+                    return true;
+                }
+                case "tab":
+                    if (trial) {
+                        startTrial(trial.idx + (shift ? -1 : 1));
+                        return true;
+                    }
+                    return false;
+                case "c": {
+                    const sl = l.sel;
+                    if (sl?.kind !== "domain")
+                        return false;
+                    if (clearDrifts(l, sl.id)) {
+                        wf.clear();
+                        say(`${sl.id}: clock flattened`);
+                    }
+                    else
+                        say("that clock has no drifts");
                     return true;
                 }
                 case "j":

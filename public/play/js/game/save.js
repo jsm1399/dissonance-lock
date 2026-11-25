@@ -6,6 +6,7 @@ export const emptySave = (levels) => ({
     stars: Array.from({ length: levels }, () => 0),
     driftBest: 0,
     daily: { key: "", depth: 0 },
+    trials: [],
 });
 const num = (x) => (typeof x === "number" && Number.isFinite(x) ? x : null);
 /** Tolerant parser: any malformed input yields a usable save. */
@@ -26,6 +27,8 @@ export function parseSave(raw, levels) {
         if (j.daily && typeof j.daily.key === "string") {
             out.daily = { key: j.daily.key, depth: Math.max(0, num(j.daily.depth) ?? 0) };
         }
+        if (Array.isArray(j.trials))
+            out.trials = [...new Set(j.trials.filter((x) => typeof x === "string"))].slice(0, 64);
     }
     catch { /* corrupt save: start fresh */ }
     return out;

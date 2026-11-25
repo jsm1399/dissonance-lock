@@ -13,6 +13,8 @@ export interface SaveData {
   driftBest: number;
   /** deepest Drift level cleared in today's daily run */
   daily: { key: string; depth: number };
+  /** Observatory Calibration Trials cleared (ids) */
+  trials: string[];
 }
 
 export const emptySave = (levels: number): SaveData => ({
@@ -21,6 +23,7 @@ export const emptySave = (levels: number): SaveData => ({
   stars: Array.from({ length: levels }, () => 0),
   driftBest: 0,
   daily: { key: "", depth: 0 },
+  trials: [],
 });
 
 const num = (x: unknown): number | null => (typeof x === "number" && Number.isFinite(x) ? x : null);
@@ -41,6 +44,7 @@ export function parseSave(raw: string | null, levels: number): SaveData {
     if (j.daily && typeof j.daily.key === "string") {
       out.daily = { key: j.daily.key, depth: Math.max(0, num(j.daily.depth) ?? 0) };
     }
+    if (Array.isArray(j.trials)) out.trials = [...new Set(j.trials.filter((x): x is string => typeof x === "string"))].slice(0, 64);
   } catch { /* corrupt save: start fresh */ }
   return out;
 }

@@ -354,6 +354,15 @@ export function emissionsUpTo(lab, tRoot, per) {
     }
     return out;
 }
+/** Flatten a domain's clock: remove every scheduled drift (its rate stays at the initial value). */
+export function clearDrifts(lab, id) {
+    const d = lab.spec.domains.find((x) => x.id === id);
+    if (!d || d.changes.length === 0)
+        return false;
+    d.changes = [];
+    rebuild(lab);
+    return true;
+}
 // ---------- arithmetic reference (zeta beacons) ----------
 export const hasZeta = (lab) => lab.spec.emitters.some((e) => e.zeta !== undefined);
 /** Switch a free-running emitter between a metronome and the zeta zeros. Relays follow their source and cannot. */
@@ -394,7 +403,8 @@ export function zetaFix(lab, emitterId) {
     const mid = run[Math.floor(run.length / 2)].m.launchRoot;
     const gap = (run[run.length - 1].a - run[0].a) / (run.length - 1);
     const deviation = fix.residual / gap;
-    const verdict = fix.confidence < 1.5 ? "ambiguous" : deviation < 0.003 ? "baseline" : deviation < 0.03 ? "bent" : "broken";
+    // a badly misfitting beacon is simply broken; "ambiguous" is only for a clean fit that several zeros explain equally well
+    const verdict = deviation >= 0.03 ? "broken" : deviation >= 0.003 ? "bent" : fix.confidence < 1.5 ? "ambiguous" : "baseline";
     return {
         ...base, fix, identified: fix.offset === base.firstK, rateEst: e.zeta / fix.slope, rateTrue: lab.tree.rateToRoot(dom, mid), deviation, verdict,
     };

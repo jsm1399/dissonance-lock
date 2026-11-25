@@ -1,4 +1,4 @@
-# STATUS — Dissonance-Lock v1.9
+# STATUS — Dissonance-Lock v1.10
 
 ## Live capabilities
 - Game: tutorial, 6 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
@@ -20,6 +20,7 @@
 
 - **NEW v1.9 Arithmetic reference (ZETA, key J):** select a free-running emitter and press ZETA: instead of a metronome it pulses at phase + scale x gamma_k, where gamma_k are the non-trivial Riemann zeta zeros (14.13, 21.02, 25.01, ...). The zeros are COMPUTED (`core/strata/zeta.ts`: Hardy Z via exact Euler-Maclaurin, sign changes, bisection; first zeros match the literature to 1e-7 and the count matches N(100)=29 and Riemann-von Mangoldt), never hard-coded. `-`/`=` change the scale. Relays and feedback work on a zeta source.
 - **NEW v1.9 Blind calibration (FIX line):** the probe takes only the arrival times of >=5 consecutive pulses of a zeta beacon (no labels, no knowledge of the sender's clock) and recovers WHICH zeros it heard, the sender's clock rate, and the lag, by matching the irregular gap fingerprint. A metronome cannot do this (it is ambiguous in index and in clock-vs-period). Residual = deviation from arithmetic time: clock drift or a bent world shows as `bent`/`broken`. Verified in tests against the true rate.
+- **NEW v1.10 Calibration Trials (menu T):** four broken worlds repaired with the Observatory's own tools, judged by its own audits (goal must hold 1 s): Runaway (tame a loop that doubles itself, keep the loop), Ring Forever (tune a fading loop to marginal), Quiet the Clock (a zeta beacon's clock drifts; make the probe's FIX read baseline), Fan-Out (two taps create energy; make the world passive, keep both taps). Tab/Shift+Tab switch trials, RESET restarts, progress saved (`save.trials`). Trials never overwrite the sandbox world or the share link. New tool: C on a selected domain flattens its clock (removes all drifts). Verdict tweak: a badly misfitting zeta beacon now reads BROKEN, ambiguous is only for a clean but non-unique fit.
 - **Doctrine (Riemann):** Nov 2026 an Anthropic mathematician (Levent Alpoge) claimed a Claude-assisted, Lean-formalised proof of the Riemann Hypothesis; reports say it is not yet independently verified (some mathematicians call it very likely valid). NOTHING in the project depends on RH being true: the calibration uses numerically computed zeros, which are what they are either way. Treat the zeta zeros as the project's invariant reference ("tuning fork"). Do NOT present "zeta = source code of the vacuum" as fact: it is speculation. If used it is in-world lore, labelled as such. Honest real links to explore later: zeros as a spectrum (Hilbert-Polya), random-matrix statistics of the gaps, machine-checked audits (Lean-style) as the project's guardrails.
 
 ## Known limits
@@ -32,8 +33,8 @@
 - Spacetime segments are straight (launch → arrival); bent paths show correct arrival but not the in-flight route.
 
 ## Next objectives
-1. Calibration as a game and a tool: "tune the world" levels (restore a bent domain until the zeta FIX reads baseline); several probes triangulating a drifting clock.
-2. Reality-edit scripting: save/restore named interventions (cuts, loops, beacons) inside the link.
-3. Spectral instrument: the gap statistics of the zeros vs a world's own pulse spectrum (random-matrix style comparison).
-4. Causal-chain levels where effects reach you before causes; Observatory challenges as playable puzzles ("stabilise this loop").
-5. Movable slice plane, 4D (two hidden axes) and depth triangulation with several probes.
+1. More trials and a trial editor path: author a trial from any Observatory world (goal = an audit threshold) and share it by link.
+2. Calibration as a tool: several probes triangulating a drifting clock; zeta fix under PATH·BENT.
+3. Reality-edit scripting: save/restore named interventions (cuts, loops, beacons) inside the link.
+4. Spectral instrument: gap statistics of the zeros vs a world's own pulse spectrum.
+5. Causal-chain levels in the campaign (effects reach you before causes); movable slice plane; 4D.

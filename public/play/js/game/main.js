@@ -8,6 +8,7 @@ import { draw, layout, resetRender } from "./render.js";
 import { sfx } from "./sfx.js";
 import { BRIEFS, driftBrief } from "./lore.js";
 import { createObservatory } from "../lab/observatory.js";
+import { TRIALS } from "../lab/trials.js";
 import { decodeWorld, encodeWorld, parseWorld } from "../lab/world.js";
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -56,6 +57,14 @@ const obs = createObservatory({
         catch { /* ignore */ }
         toMenu();
     },
+    onTrial(id) {
+        if (!save.trials.includes(id)) {
+            save.trials.push(id);
+            writeSave();
+        }
+        sfx.win();
+    },
+    cleared: () => save.trials,
     link: labLink,
     copy: async (text) => {
         try {
@@ -84,6 +93,15 @@ function openLab(spec) {
     ui.screen = "lab";
     sfx.unlock();
 }
+function openTrials() {
+    const first = TRIALS.findIndex((t) => !save.trials.includes(t.id));
+    game = null;
+    tutor = null;
+    ui.hint = null;
+    obs.openTrial(first < 0 ? 0 : first);
+    ui.screen = "lab";
+    sfx.unlock();
+}
 let actions = [];
 function buildMenu() {
     const items = [];
@@ -97,6 +115,8 @@ function buildMenu() {
         right: save.daily.key === today && save.daily.depth > 0 ? `depth ${save.daily.depth}` : "—" }, () => startDrift(true));
     add({ key: "F", title: "Free Drift", blurb: "endless · random seed · each depth is harder",
         right: save.driftBest > 0 ? `best ${save.driftBest}` : "—" }, () => startDrift(false));
+    add({ key: "T", title: "Calibration Trials", blurb: "repair broken worlds with the Observatory's instruments · loops · clocks · energy",
+        right: `${save.trials.filter((id) => TRIALS.some((t) => t.id === id)).length}/${TRIALS.length}` }, () => openTrials());
     add({ key: "O", title: "Observatory", blurb: "build strata · scrub time · probe causality · share by link", right: "sandbox" }, () => openLab());
     return items;
 }
@@ -509,6 +529,8 @@ window.__dl = {
     lab: () => obs.lab(),
     screen: (p) => obs.toScreen(p),
     openLab,
+    openTrials,
+    trial: () => obs.trialIdx(),
 };
 if (location.hash.startsWith("#w=")) {
     const shared = decodeWorld(location.hash.slice(3));
