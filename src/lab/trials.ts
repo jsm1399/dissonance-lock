@@ -1,5 +1,7 @@
-import { feedbackAudit, hasFeedback, zetaFix } from "./lab.js";
+import { auditEmitter, feedbackAudit, hasFeedback, zetaFix } from "./lab.js";
+import { LAWFUL } from "../core/laws/index.js";
 import type { Lab } from "./lab.js";
+import { lawsOf } from "./world.js";
 import type { WorldSpec } from "./world.js";
 
 /**
@@ -99,6 +101,23 @@ export const TRIALS: Trial[] = [
       const strong = taps.every((e) => (e.fb?.gain ?? 0) >= 0.25);
       const a = feedbackAudit(lab);
       return { ok: !a.amplifier && strong, status: `${a.amplifier ? "✗ energy created" : "✓ passive"} · fan-out ${sum.toFixed(2)} · need ≤ 1.00, each tap ≥ 0.25` };
+    },
+  },
+  {
+    id: "heavy", name: "Heavy Space",
+    brief: "Space here has 4 dimensions, but the flux law runs away and the audit says energy is CREATED. Keep DIM at 4 and make the audit read conserved.",
+    t: 20,
+    world: () => ({
+      v: 1, rootSpeed: 6, domains: [],
+      emitters: [em({ id: "E", pos: [20, 50], period: 4 })],
+      laws: { ...LAWFUL, dim: 4, gauss: "runaway" },
+    }),
+    check(lab) {
+      const au = auditEmitter(lab, "E");
+      const L = lawsOf(lab.spec);
+      if (!au) return { ok: false, status: "no pulse yet" };
+      const v = au.audit.verdict;
+      return { ok: v === "conserved" && L.dim === 4, status: `energy ${v.toUpperCase()} · DIM ${L.dim} · need conserved at DIM 4` };
     },
   },
 ];

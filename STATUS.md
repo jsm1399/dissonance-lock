@@ -1,4 +1,4 @@
-# STATUS — Dissonance-Lock v1.10
+# STATUS — Dissonance-Lock v1.11
 
 ## Live capabilities
 - Game: tutorial, 6 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
@@ -21,6 +21,9 @@
 - **NEW v1.9 Arithmetic reference (ZETA, key J):** select a free-running emitter and press ZETA: instead of a metronome it pulses at phase + scale x gamma_k, where gamma_k are the non-trivial Riemann zeta zeros (14.13, 21.02, 25.01, ...). The zeros are COMPUTED (`core/strata/zeta.ts`: Hardy Z via exact Euler-Maclaurin, sign changes, bisection; first zeros match the literature to 1e-7 and the count matches N(100)=29 and Riemann-von Mangoldt), never hard-coded. `-`/`=` change the scale. Relays and feedback work on a zeta source.
 - **NEW v1.9 Blind calibration (FIX line):** the probe takes only the arrival times of >=5 consecutive pulses of a zeta beacon (no labels, no knowledge of the sender's clock) and recovers WHICH zeros it heard, the sender's clock rate, and the lag, by matching the irregular gap fingerprint. A metronome cannot do this (it is ambiguous in index and in clock-vs-period). Residual = deviation from arithmetic time: clock drift or a bent world shows as `bent`/`broken`. Verified in tests against the true rate.
 - **NEW v1.10 Calibration Trials (menu T):** four broken worlds repaired with the Observatory's own tools, judged by its own audits (goal must hold 1 s): Runaway (tame a loop that doubles itself, keep the loop), Ring Forever (tune a fading loop to marginal), Quiet the Clock (a zeta beacon's clock drifts; make the probe's FIX read baseline), Fan-Out (two taps create energy; make the world passive, keep both taps). Tab/Shift+Tab switch trials, RESET restarts, progress saved (`save.trials`). Trials never overwrite the sandbox world or the share link. New tool: C on a selected domain flattens its clock (removes all drifts). Verdict tweak: a badly misfitting zeta beacon now reads BROKEN, ambiguous is only for a clean but non-unique fit.
+- **NEW v1.11 Law inference (LAWS line):** from measurements alone (a ring of 48 virtual probes around an emitter) the Observatory fits flux ~ r^-n x exp(-loss x length inside domains) and reports the spreading exponent n and absorption. It then lists EVERY (dimension, Gauss law) pair that spreads that way: D3 holds, D2 leaky and D4 runaway are indistinguishable from intensity alone (n = 2). Telling universes apart needs an independent measurement of D (the hidden-axis detector) or the energy audit. Absorption reads "not measurable" if no path crossed a domain. `core/laws/fit.ts`, recovery exact in tests for D2..6 and all Gauss laws.
+- **NEW v1.11 Trial 5, Heavy Space:** DIM 4 with runaway flux creates energy; keep DIM 4 and make the audit read conserved (teaches that dimension and Gauss law are different knobs).
+- **Perf (v1.11):** vector helpers are allocation-free (identical arithmetic), the whole test suite runs ~2.5x faster, and the feedback engine has a 2000-hop budget (cascade flagged 'capped' beyond it).
 - **Doctrine (Riemann):** Nov 2026 an Anthropic mathematician (Levent Alpoge) claimed a Claude-assisted, Lean-formalised proof of the Riemann Hypothesis; reports say it is not yet independently verified (some mathematicians call it very likely valid). NOTHING in the project depends on RH being true: the calibration uses numerically computed zeros, which are what they are either way. Treat the zeta zeros as the project's invariant reference ("tuning fork"). Do NOT present "zeta = source code of the vacuum" as fact: it is speculation. If used it is in-world lore, labelled as such. Honest real links to explore later: zeros as a spectrum (Hilbert-Polya), random-matrix statistics of the gaps, machine-checked audits (Lean-style) as the project's guardrails.
 
 ## Known limits
@@ -33,8 +36,8 @@
 - Spacetime segments are straight (launch → arrival); bent paths show correct arrival but not the in-flight route.
 
 ## Next objectives
-1. More trials and a trial editor path: author a trial from any Observatory world (goal = an audit threshold) and share it by link.
-2. Calibration as a tool: several probes triangulating a drifting clock; zeta fix under PATH·BENT.
-3. Reality-edit scripting: save/restore named interventions (cuts, loops, beacons) inside the link.
-4. Spectral instrument: gap statistics of the zeros vs a world's own pulse spectrum.
-5. Causal-chain levels in the campaign (effects reach you before causes); movable slice plane; 4D.
+1. Inverse problem, part 2: infer the TIME law and MEDIUM from heard timing (zeta fix gives clock rate; add echo-speed fit), then a "Which universe?" trial where the laws are hidden and the player must identify them by instruments.
+2. Several probes: triangulate a drifting clock, and the hidden-axis depth (4D: second axis).
+3. Trial editor: author a trial from any Observatory world (goal = an audit threshold) and share it by link.
+4. Reality-edit scripting: named interventions in the link.
+5. Causal-chain levels in the campaign; movable slice plane.

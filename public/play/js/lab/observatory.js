@@ -1,7 +1,7 @@
 import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
-import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
@@ -10,7 +10,7 @@ const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
     { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 184;
+const BOT_H = 204;
 const LAW_HOTKEY = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
 const LAW_TITLE = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
 const lawValue = (k, L) => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
@@ -846,6 +846,15 @@ export function createObservatory(hooks) {
             text(c, "LOOPS", 14, botTop + 110, 10, "rgba(180,200,220,0.6)");
             text(c, msg, 64, botTop + 110, 11, col);
         }
+        {
+            const lf = lawFit(l);
+            if (lf) {
+                const g = lf.guesses.map((q) => `D${q.dim}·${q.gauss}`).join(" | ") || "none of D2–D6";
+                const ab = lf.fit.loss === null ? "absorption: no path crossed a domain" : `absorbs ${lf.fit.loss.toFixed(3)}/len`;
+                text(c, "LAWS", 14, botTop + 148, 10, "rgba(180,200,220,0.6)");
+                text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} · declared D${lf.declared.dim}·${lf.declared.gauss}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent ? "rgba(180,200,220,0.85)" : "#ff4d6d");
+            }
+        }
         if (hasZeta(l)) {
             const zf = zetaFix(l);
             let msg = "", col = "rgba(180,200,220,0.7)";
@@ -884,7 +893,7 @@ export function createObservatory(hooks) {
         c.font = `400 10px ${FONT}`;
         const maxW = w - 28;
         const words = info.split(" ");
-        let line = "", ly = botTop + 150, lines = 0;
+        let line = "", ly = botTop + 170, lines = 0;
         for (const wd of words) {
             const test = line ? `${line} ${wd}` : wd;
             if (c.measureText(test).width > maxW && line && lines < 1) {

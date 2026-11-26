@@ -51,7 +51,7 @@ function survival(tree, a, b, loss, mo) {
 }
 const MARCH_DEFAULT = { maxStep: 1 };
 export function runFeedback(tree, nodes, edges, seeds, opts) {
-    const ampMin = opts.ampMin ?? 0.02, ampMax = opts.ampMax ?? 64, cap = opts.maxPulses ?? 1500;
+    const ampMin = opts.ampMin ?? 0.02, ampMax = opts.ampMax ?? 64, cap = opts.maxPulses ?? 1500, maxHops = opts.maxHops ?? 2000;
     const loss = opts.loss ?? 0, mo = opts.march ?? MARCH_DEFAULT;
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const out = new Map();
@@ -83,6 +83,7 @@ export function runFeedback(tree, nodes, edges, seeds, opts) {
         injected++;
     }
     const echoes = [];
+    let hops = 0;
     let peak = 0, faded = 0, saturated = false, truncated = false;
     for (let ev = heap.pop(); ev; ev = heap.pop()) {
         if (ev.sat)
@@ -93,6 +94,10 @@ export function runFeedback(tree, nodes, edges, seeds, opts) {
             if (amp < ampMin) {
                 faded++;
                 continue;
+            }
+            if (++hops > maxHops) {
+                truncated = true;
+                break;
             }
             const arr = march(tree, a.site, ev.launchLocal, b.site, mo).rootTime;
             const launchLocal = tree.toLocalTime(b.site.domain, arr) + e.delay;

@@ -45,6 +45,8 @@ export interface FbOptions {
   ampMax?: number;
   /** hard cap on echoes (default 1500) */
   maxPulses?: number;
+  /** hard cap on hop computations (default 2000): bounds the cost when fast clocks launch thousands of pulses */
+  maxHops?: number;
   march?: MarchOptions;
 }
 
@@ -127,7 +129,7 @@ const MARCH_DEFAULT: MarchOptions = { maxStep: 1 };
 export function runFeedback(
   tree: StrataTree, nodes: readonly FbNode[], edges: readonly FbEdge[], seeds: readonly FbSeed[], opts: FbOptions,
 ): FbResult {
-  const ampMin = opts.ampMin ?? 0.02, ampMax = opts.ampMax ?? 64, cap = opts.maxPulses ?? 1500;
+  const ampMin = opts.ampMin ?? 0.02, ampMax = opts.ampMax ?? 64, cap = opts.maxPulses ?? 1500, maxHops = opts.maxHops ?? 2000;
   const loss = opts.loss ?? 0, mo = opts.march ?? MARCH_DEFAULT;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const out = new Map<string, FbEdge[]>();
@@ -153,6 +155,7 @@ export function runFeedback(
   }
 
   const echoes: Ev[] = [];
+  let hops = 0;
   let peak = 0, faded = 0, saturated = false, truncated = false;
   for (let ev = heap.pop(); ev; ev = heap.pop()) {
     if (ev.sat) continue; // saturated: stays in the record, spawns nothing
@@ -160,6 +163,7 @@ export function runFeedback(
       const a = byId.get(ev.node) as FbNode, b = byId.get(e.to) as FbNode;
       const amp = ev.amp * e.gain * surv(e);
       if (amp < ampMin) { faded++; continue; }
+      if (++hops > maxHops) { truncated = true; break; }
       const arr = march(tree, a.site, ev.launchLocal, b.site, mo).rootTime;
       const launchLocal = tree.toLocalTime(b.site.domain, arr) + e.delay;
       const launchRoot = tree.toRootTime(b.site.domain, launchLocal);

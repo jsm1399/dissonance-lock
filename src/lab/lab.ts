@@ -1,7 +1,7 @@
 import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
 import type { Arrival, ArrivalField, BeaconFix, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
-import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay } from "../core/laws/index.js";
-import type { Laws, RayAudit } from "../core/laws/index.js";
+import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitSpreading } from "../core/laws/index.js";
+import type { LawGuess, Laws, RayAudit, SpreadFit } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
 import { isLawful } from "../core/laws/index.js";
 import type { DomainDef, EmitterDef, WorldSpec } from "./world.js";
@@ -61,6 +61,8 @@ export interface Lab {
   fb: FbCache | null;
   /** stability audit of the feedback graph, keyed by rev and scrub time */
   fbAudit: { key: string; value: FbAudit } | null;
+  /** law inference for one emitter, keyed by rev and emitter */
+  lawFit: { key: string; value: LawFitResult | null } | null;
 }
 
 export interface FbCache { result: FbResult; byNode: Map<string, FbEcho[]>; byKey: Map<string, FbEcho> }
@@ -79,7 +81,7 @@ export function newLab(spec: WorldSpec = defaultWorld()): Lab {
   }
   return {
     spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, sel: null, tool: "select",
-    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null,
+    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null, lawFit: null,
   };
 }
 
@@ -138,6 +140,7 @@ export function rebuild(lab: Lab): void {
   lab.launches.clear();
   lab.fb = null;
   lab.fbAudit = null;
+  lab.lawFit = null;
   lab.rev++;
 }
 
@@ -704,3 +707,50 @@ export function auditEmitter(lab: Lab, emitterId?: string): { emitter: string; a
 }
 
 export const ENERGY = 100;
+
+export interface LawFitResult {
+  emitter: string;
+  fit: SpreadFit;
+  /** every (dimension, Gauss law) that spreads the same way: intensity alone cannot choose */
+  guesses: LawGuess[];
+  declared: { dim: number; gauss: string; loss: number };
+  /** is the declared pair among the guesses? (it must be: a check that the instrument reads the world honestly) */
+  consistent: boolean;
+}
+
+/**
+ * Law inference: measure the flux of one emitter's latest pulse at ring of virtual probes (6 radii x 8 bearings),
+ * fit intensity ~ r^-n exp(-loss x length inside domains), and list every pair of laws that spreads that way.
+ */
+export function lawFit(lab: Lab, emitterId?: string): LawFitResult | null {
+  const id = emitterId ?? (lab.sel?.kind === "emitter" ? lab.sel.id : lab.spec.emitters[0]?.id);
+  const e = lab.spec.emitters.find((x) => x.id === id);
+  if (!e) return null;
+  const key = `${lab.rev}|${e.id}`;
+  if (lab.lawFit && lab.lawFit.key === key) return lab.lawFit.value;
+  const laws = lawsOf(lab.spec), wells = wellIds(lab.spec);
+  const here = emitterPos(lab, e), from = lab.tree.toRootPos(e.domain, here);
+  const samples: { r: number; intensity: number; inside: number }[] = [];
+  for (let b = 0; b < 8; b++) {
+    const th = (b * Math.PI) / 4;
+    for (const r of [4, 8, 14, 22, 32, 44]) {
+      const x = from[0] + r * Math.cos(th), y = from[1] + r * Math.sin(th);
+      if (x < 0 || x > SIZE || y < 0 || y > SIZE) continue;
+      const site: Vec = lab.spec.bulk ? [x, y, lab.probeZ] : [x, y];
+      const ray = march(lab.tree, { domain: e.domain, pos: here }, 0, { domain: "root", pos: site }, MARCH);
+      const rr = dist(from, site);
+      const a = auditRay(laws, ray.segments, wells, ENERGY, rr);
+      let inside = 0;
+      for (const s of ray.segments) if (s.domain !== "root") inside += s.length;
+      samples.push({ r: rr, intensity: a.intensity, inside });
+    }
+  }
+  const fit = fitSpreading(samples);
+  const value: LawFitResult | null = fit ? {
+    emitter: e.id, fit, guesses: consistentLaws(fit.n, 0.08),
+    declared: { dim: laws.dim, gauss: laws.gauss, loss: laws.loss },
+    consistent: consistentLaws(fit.n, 0.08).some((g) => g.dim === laws.dim && g.gauss === laws.gauss),
+  } : null;
+  lab.lawFit = { key, value };
+  return value;
+}
