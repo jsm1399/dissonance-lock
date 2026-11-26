@@ -6,6 +6,7 @@ import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import { TRIALS } from "./trials.js";
+import { nextLaw } from "./lab.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
     { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
@@ -31,12 +32,15 @@ export function createObservatory(hooks) {
     let loopFrom = null;
     /** Calibration Trial in progress: the goal must hold for HOLD seconds */
     let trial = null;
+    let attempt = 0;
+    /** the laws the toolbar shows: the player's guess in a hidden-law trial, else the world's */
+    const shown = (l) => trial?.guess ?? lawsOf(l.spec);
     const HOLD = 1;
     const wf = new Map();
     const say = (t, now = performance.now()) => { toast = { text: t, until: now + 1800 }; };
     function layout(ctx, w, h) {
         const l = lab;
-        const laws = lawsOf(l.spec);
+        const laws = shown(l);
         const items = [
             ...TOOLS,
             { id: "play", label: l.playing ? "PAUSE" : "PLAY" },
@@ -84,8 +88,8 @@ export function createObservatory(hooks) {
     const toWorld = (px, py) => [(px - geo.x0) / geo.s, (py - geo.y0) / geo.s];
     const inWorld = (p) => p[0] >= 0 && p[0] <= SIZE && p[1] >= 0 && p[1] <= SIZE;
     function startTrial(idx) {
-        const n = TRIALS.length, i = ((idx % n) + n) % n, t = TRIALS[i];
-        lab = newLab(t.world());
+        const n = TRIALS.length, i = ((idx % n) + n) % n, t = TRIALS[i], seed = ++attempt;
+        lab = newLab(t.world(seed));
         lab.t = t.t;
         lastRev = -1;
         view = "map";
@@ -94,7 +98,7 @@ export function createObservatory(hooks) {
         loopFrom = null;
         toast = null;
         wf.clear();
-        trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" } };
+        trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" }, seed, hidden: t.hidden !== undefined, guess: t.hidden ? { ...LAWFUL } : null };
     }
     function activate(id) {
         const l = lab;
@@ -173,6 +177,11 @@ export function createObservatory(hooks) {
         else if (id === "menu")
             hooks.onExit();
         else if (id === "lawful") {
+            if (trial?.guess) {
+                trial.guess = { ...LAWFUL };
+                say("guess reset to lawful");
+                return;
+            }
             resetLaws(l);
             wf.clear();
             say("laws restored: lawful");
@@ -184,6 +193,15 @@ export function createObservatory(hooks) {
     }
     function lawStep(k) {
         const l = lab;
+        if (trial?.guess) {
+            if (k !== "time" && k !== "dim" && k !== "loss" && k !== "gauss") {
+                say(`${LAW_TITLE[k]} is fixed in this trial`);
+                return;
+            }
+            trial.guess = nextLaw(trial.guess, k);
+            say(`guess: ${LAW_TITLE[k]} → ${lawValue(k, trial.guess).toLowerCase()}`);
+            return;
+        }
         const next = cycleLaw(l, k);
         wf.clear();
         say(`${LAW_TITLE[k]} → ${lawValue(k, next).toLowerCase()}`);
@@ -762,7 +780,7 @@ export function createObservatory(hooks) {
     function drawToolbar(c, l) {
         for (const b of btns) {
             const isLaw = b.id.startsWith("law:");
-            const bent = isLaw && !lawIsDefault(b.id.slice(4), lawsOf(l.spec));
+            const bent = isLaw && !lawIsDefault(b.id.slice(4), shown(l));
             const on = (b.id === "bulk" && !!l.spec.bulk) || (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
             const col = bent ? "#ffb454" : "#7fdbca";
             c.fillStyle = bent ? "rgba(255,180,84,0.16)" : on ? "rgba(127,219,202,0.22)" : "rgba(255,255,255,0.05)";
@@ -850,9 +868,9 @@ export function createObservatory(hooks) {
             const lf = lawFit(l);
             if (lf) {
                 const g = lf.guesses.map((q) => `D${q.dim}·${q.gauss}`).join(" | ") || "none of D2–D6";
-                const ab = lf.fit.loss === null ? "absorption: no path crossed a domain" : `absorbs ${lf.fit.loss.toFixed(3)}/len`;
+                const ab = lf.fit.loss === null ? "absorption: no path crossed a domain" : `absorbs ${(Math.abs(lf.fit.loss) < 5e-4 ? 0 : lf.fit.loss).toFixed(3)}/len`;
                 text(c, "LAWS", 14, botTop + 148, 10, "rgba(180,200,220,0.6)");
-                text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} · declared D${lf.declared.dim}·${lf.declared.gauss}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent ? "rgba(180,200,220,0.85)" : "#ff4d6d");
+                text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} ${trial?.hidden ? "" : ` · declared D${lf.declared.dim}·${lf.declared.gauss}`}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent || trial?.hidden ? "rgba(180,200,220,0.85)" : "#ff4d6d");
             }
         }
         if (hasZeta(l)) {
@@ -950,7 +968,7 @@ export function createObservatory(hooks) {
                     hooks.onChange(lab.spec);
             }
             if (trial) {
-                trial.res = TRIALS[trial.idx].check(lab);
+                trial.res = TRIALS[trial.idx].check(lab, { guess: trial.guess });
                 trial.held = trial.res.ok ? trial.held + dt : 0;
                 if (!trial.done && trial.held >= HOLD) {
                     trial.done = true;

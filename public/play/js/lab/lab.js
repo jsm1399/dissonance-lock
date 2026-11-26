@@ -655,7 +655,13 @@ const nextIn = (steps, v) => {
 };
 /** Cycle one law to its next value and rebuild the world under it. */
 export function cycleLaw(lab, key) {
-    const cur = lawsOf(lab.spec);
+    const next = nextLaw(lawsOf(lab.spec), key);
+    lab.spec.laws = next;
+    rebuild(lab);
+    return next;
+}
+/** The laws after one click of a knob (pure: the Which-Universe trial turns knobs on a guess, not on the world). */
+export function nextLaw(cur, key) {
     const next = { ...cur };
     if (key === "time")
         next.time = cur.time === "local" ? "global" : "local";
@@ -671,8 +677,6 @@ export function cycleLaw(lab, key) {
         next.path = cur.path === "straight" ? "bent" : "straight";
     else
         next.gauss = cur.gauss === "holds" ? "leaky" : cur.gauss === "leaky" ? "runaway" : "holds";
-    lab.spec.laws = next;
-    rebuild(lab);
     return next;
 }
 export function resetLaws(lab) {

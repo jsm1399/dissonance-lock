@@ -1,5 +1,7 @@
 import { auditEmitter, feedbackAudit, hasFeedback, zetaFix } from "./lab.js";
-import { LAWFUL } from "../core/laws/index.js";
+import { LAWFUL, LOSS_STEPS } from "../core/laws/index.js";
+import type { Laws } from "../core/laws/index.js";
+import { rng } from "../game/rng.js";
 import type { Lab } from "./lab.js";
 import { lawsOf } from "./world.js";
 import type { WorldSpec } from "./world.js";
@@ -11,16 +13,21 @@ import type { WorldSpec } from "./world.js";
  */
 export interface TrialState { ok: boolean; status: string }
 
+/** Per-attempt context from the Observatory: the player's current guess when the world's laws are hidden. */
+export interface TrialCtx { guess: Laws | null }
+
 export interface Trial {
   id: string;
   name: string;
   /** one line, what is wrong and what to achieve */
   brief: string;
-  /** the broken world */
-  world(): WorldSpec;
+  /** the broken world (`seed` varies hidden-law trials between attempts) */
+  world(seed?: number): WorldSpec;
+  /** hidden-law trial: the true laws for a seed. The knobs then turn the player's guess, not the world. */
+  hidden?(seed: number): Laws;
   /** scrub time the trial is set at */
   t: number;
-  check(lab: Lab): TrialState;
+  check(lab: Lab, ctx?: TrialCtx): TrialState;
 }
 
 type Em = WorldSpec["emitters"][number];
@@ -120,4 +127,45 @@ export const TRIALS: Trial[] = [
       return { ok: v === "conserved" && L.dim === 4, status: `energy ${v.toUpperCase()} · DIM ${L.dim} · need conserved at DIM 4` };
     },
   },
+  {
+    id: "universe", name: "Which Universe?",
+    brief: "The laws are hidden. Select E and read LAWS and AUDIT; read the zeta FIX for Z. Set TIME, DIM, LOSS, GAUSS to match. RESET draws a new universe.",
+    t: 100,
+    hidden: (seed) => hiddenLaws(seed),
+    world: (seed = 1) => ({
+      v: 1, rootSpeed: 6,
+      domains: [
+        { id: "m", parent: "root", origin: [30, 62], scale: 1, extent: 18, echoSpeed: 6, rate: 1, shearMin: null, changes: [] },
+        { id: "f", parent: "root", origin: [72, 30], scale: 1, extent: 14, echoSpeed: 6, rate: 3, shearMin: null, changes: [] },
+      ],
+      emitters: [
+        em({ id: "E", domain: "m", pos: [0, 0], period: 4, hue: 190 }),
+        em({ id: "Z", domain: "f", pos: [0, 0], zeta: 2, hue: 40 }),
+      ],
+      laws: hiddenLaws(seed),
+    }),
+    check(lab, ctx) {
+      const g = ctx?.guess, h = lawsOf(lab.spec);
+      if (!g) return { ok: false, status: "no guess yet" };
+      const ok = g.time === h.time && g.dim === h.dim && g.loss === h.loss && g.gauss === h.gauss;
+      return { ok, status: `guess ${g.time} · D${g.dim} · loss ${g.loss} · ${g.gauss}${ok ? "" : " · measure, then set the knobs"}` };
+    },
+  },
 ];
+
+/** Seeded hidden laws: time, dimension, loss and Gauss vary; medium and noise stay lawful. Always at least 2 deviations. */
+export function hiddenLaws(seed: number): Laws {
+  const r = rng(seed * 2654435761 + 12345);
+  for (let i = 0; i < 50; i++) {
+    const L: Laws = {
+      ...LAWFUL,
+      time: r() < 0.5 ? "local" : "global",
+      dim: 2 + Math.floor(r() * 4),
+      loss: LOSS_STEPS[Math.floor(r() * LOSS_STEPS.length)],
+      gauss: (["holds", "leaky", "runaway"] as const)[Math.floor(r() * 3)],
+    };
+    const dev = (L.time !== LAWFUL.time ? 1 : 0) + (L.dim !== LAWFUL.dim ? 1 : 0) + (L.loss !== LAWFUL.loss ? 1 : 0) + (L.gauss !== LAWFUL.gauss ? 1 : 0);
+    if (dev >= 2) return L;
+  }
+  return { ...LAWFUL, dim: 4, gauss: "leaky" };
+}
