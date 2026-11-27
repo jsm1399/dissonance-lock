@@ -1,5 +1,5 @@
 import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
-import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitSpreading } from "../core/laws/index.js";
+import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitDelay, fitNoise, fitSpreading } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
 import { isLawful } from "../core/laws/index.js";
 export const SIZE = 100;
@@ -713,6 +713,8 @@ export function lawFit(lab, emitterId) {
     const laws = lawsOf(lab.spec), wells = wellIds(lab.spec);
     const here = emitterPos(lab, e), from = lab.tree.toRootPos(e.domain, here);
     const samples = [];
+    const noiseS = [], delayS = [];
+    const t0 = lab.tree.toRootTime(e.domain, 0);
     for (let b = 0; b < 8; b++) {
         const th = (b * Math.PI) / 4;
         for (const r of [4, 8, 14, 22, 32, 44]) {
@@ -723,17 +725,25 @@ export function lawFit(lab, emitterId) {
             const ray = march(lab.tree, { domain: e.domain, pos: here }, 0, { domain: "root", pos: site }, MARCH);
             const rr = dist(from, site);
             const a = auditRay(laws, ray.segments, wells, ENERGY, rr);
-            let inside = 0;
+            let inside = 0, well = 0;
+            const per = {};
             for (const s of ray.segments)
-                if (s.domain !== "root")
+                if (s.domain !== "root") {
                     inside += s.length;
+                    per[s.domain] = (per[s.domain] ?? 0) + s.length;
+                    if (wells.has(s.domain))
+                        well += s.length;
+                }
             samples.push({ r: rr, intensity: a.intensity, inside });
+            noiseS.push({ fidelity: a.fidelity, well });
+            delayS.push({ D: rr, lag: ray.rootTime - t0, per });
         }
     }
     const fit = fitSpreading(samples);
     const value = fit ? {
         emitter: e.id, fit, guesses: consistentLaws(fit.n, 0.08),
         declared: { dim: laws.dim, gauss: laws.gauss, loss: laws.loss },
+        noise: fitNoise(noiseS), delay: fitDelay(delayS),
         consistent: consistentLaws(fit.n, 0.08).some((g) => g.dim === laws.dim && g.gauss === laws.gauss),
     } : null;
     lab.lawFit = { key, value };

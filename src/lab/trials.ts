@@ -1,5 +1,5 @@
 import { auditEmitter, feedbackAudit, hasFeedback, zetaFix } from "./lab.js";
-import { LAWFUL, LOSS_STEPS } from "../core/laws/index.js";
+import { LAWFUL, LOSS_STEPS, NOISE_STEPS } from "../core/laws/index.js";
 import type { Laws } from "../core/laws/index.js";
 import { rng } from "../game/rng.js";
 import type { Lab } from "./lab.js";
@@ -129,14 +129,15 @@ export const TRIALS: Trial[] = [
   },
   {
     id: "universe", name: "Which Universe?",
-    brief: "The laws are hidden. Select E and read LAWS and AUDIT; read the zeta FIX for Z. Set TIME, DIM, LOSS, GAUSS to match. RESET draws a new universe.",
+    brief: "Six laws are hidden. Select E: read LAWS, ECHO and AUDIT. Set TIME, MEDIUM, DIM, LOSS, NOISE, GAUSS to match. RESET draws a new universe.",
     t: 100,
     hidden: (seed) => hiddenLaws(seed),
     world: (seed = 1) => ({
       v: 1, rootSpeed: 6,
       domains: [
         { id: "m", parent: "root", origin: [30, 62], scale: 1, extent: 18, echoSpeed: 6, rate: 1, shearMin: null, changes: [] },
-        { id: "f", parent: "root", origin: [72, 30], scale: 1, extent: 14, echoSpeed: 6, rate: 3, shearMin: null, changes: [] },
+        { id: "w", parent: "root", origin: [60, 64], scale: 1, extent: 9, echoSpeed: 6, rate: 1, shearMin: 0.2, changes: [] },
+        { id: "f", parent: "root", origin: [60, 40], scale: 1, extent: 12, echoSpeed: 6, rate: 3, shearMin: null, changes: [] },
       ],
       emitters: [
         em({ id: "E", domain: "m", pos: [0, 0], period: 4, hue: 190 }),
@@ -147,25 +148,28 @@ export const TRIALS: Trial[] = [
     check(lab, ctx) {
       const g = ctx?.guess, h = lawsOf(lab.spec);
       if (!g) return { ok: false, status: "no guess yet" };
-      const ok = g.time === h.time && g.dim === h.dim && g.loss === h.loss && g.gauss === h.gauss;
-      return { ok, status: `guess ${g.time} · D${g.dim} · loss ${g.loss} · ${g.gauss}${ok ? "" : " · measure, then set the knobs"}` };
+      const ok = g.time === h.time && g.medium === h.medium && g.dim === h.dim && g.loss === h.loss && g.noise === h.noise && g.gauss === h.gauss;
+      return { ok, status: `guess ${g.time} · ${g.medium} · D${g.dim} · loss ${g.loss} · noise ${g.noise} · ${g.gauss}${ok ? "" : " · measure, then set the knobs"}` };
     },
   },
 ];
 
-/** Seeded hidden laws: time, dimension, loss and Gauss vary; medium and noise stay lawful. Always at least 2 deviations. */
+/** Seeded hidden laws: all six vary (only the path law stays straight). Always at least 3 deviations from lawful. */
 export function hiddenLaws(seed: number): Laws {
   const r = rng(seed * 2654435761 + 12345);
   for (let i = 0; i < 50; i++) {
     const L: Laws = {
       ...LAWFUL,
       time: r() < 0.5 ? "local" : "global",
+      medium: r() < 0.5 ? "strata" : "uniform",
+      noise: NOISE_STEPS[Math.floor(r() * NOISE_STEPS.length)],
       dim: 2 + Math.floor(r() * 4),
       loss: LOSS_STEPS[Math.floor(r() * LOSS_STEPS.length)],
       gauss: (["holds", "leaky", "runaway"] as const)[Math.floor(r() * 3)],
     };
-    const dev = (L.time !== LAWFUL.time ? 1 : 0) + (L.dim !== LAWFUL.dim ? 1 : 0) + (L.loss !== LAWFUL.loss ? 1 : 0) + (L.gauss !== LAWFUL.gauss ? 1 : 0);
-    if (dev >= 2) return L;
+    const dev = (L.time !== LAWFUL.time ? 1 : 0) + (L.medium !== LAWFUL.medium ? 1 : 0) + (L.dim !== LAWFUL.dim ? 1 : 0)
+      + (L.loss !== LAWFUL.loss ? 1 : 0) + (L.noise !== LAWFUL.noise ? 1 : 0) + (L.gauss !== LAWFUL.gauss ? 1 : 0);
+    if (dev >= 3) return L;
   }
   return { ...LAWFUL, dim: 4, gauss: "leaky" };
 }

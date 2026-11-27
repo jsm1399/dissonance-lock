@@ -47,3 +47,31 @@ test("degeneracy: the exponent alone cannot name the universe", () => {
   // exactly one of the guesses conserves energy
   for (const n of [1, 2, 3, 4]) assert.equal(consistentLaws(n).filter((x) => x.gauss === "holds").length, 1);
 });
+
+import { fitDelay, fitNoise, lsq } from "../src/core/laws/index.js";
+
+test("lsq: recovers coefficients exactly; singular systems give null", () => {
+  const x = lsq([[1, 2, 3, 4], [0, 1, 0, 1]], [2, 5, 6, 9]);
+  assert.ok(x);
+  near(x[0], 2, 1e-9); near(x[1], 1, 1e-9);
+  assert.equal(lsq([[1, 2, 3], [2, 4, 6]], [1, 2, 3]), null);
+});
+
+test("echo-speed map: speed of each domain relative to the open medium", () => {
+  // open speed 6; domain f is 3x faster, domain w is 2x slower
+  const mk = (D: number, f: number, w: number) => ({ D, per: { f, w }, lag: (D - f - w) / 6 + f / 18 + w / 3 });
+  const s = [mk(5, 0, 0), mk(12, 3, 0), mk(20, 8, 0), mk(30, 0, 6), mk(44, 0, 14), mk(25, 5, 5), mk(40, 10, 9), mk(15, 2, 7), mk(33, 12, 3)];
+  const f = fitDelay(s);
+  assert.ok(f);
+  near(f.c, 6, 1e-9);
+  near(f.speeds.find((q) => q.domain === "f")?.factor ?? NaN, 3, 1e-9);
+  near(f.speeds.find((q) => q.domain === "w")?.factor ?? NaN, 0.5, 1e-9);
+  assert.ok(f.rms < 1e-9);
+  assert.equal(fitDelay(s.slice(0, 4)), null);
+});
+
+test("noise: fidelity decay per unit well length, null when no well was crossed", () => {
+  const s = [0, 3, 8, 12, 20].map((well) => ({ well, fidelity: Math.exp(-0.06 * well) }));
+  near(fitNoise(s) as number, 0.06, 1e-12);
+  assert.equal(fitNoise([0, 0, 0].map(() => ({ well: 0, fidelity: 1 }))), null);
+});

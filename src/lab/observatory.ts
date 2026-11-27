@@ -35,7 +35,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
   { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 204;
+const BOT_H = 222;
 
 const LAW_HOTKEY: Record<string, LawKey> = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
 const LAW_TITLE: Record<LawKey, string> = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
@@ -187,7 +187,7 @@ export function createObservatory(hooks: Hooks): Observatory {
   function lawStep(k: LawKey): void {
     const l = lab as Lab;
     if (trial?.guess) {
-      if (k !== "time" && k !== "dim" && k !== "loss" && k !== "gauss") { say(`${LAW_TITLE[k]} is fixed in this trial`); return; }
+      if (k === "path") { say(`${LAW_TITLE[k]} is fixed in this trial`); return; }
       trial.guess = nextLaw(trial.guess, k);
       say(`guess: ${LAW_TITLE[k]} → ${lawValue(k, trial.guess).toLowerCase()}`);
       return;
@@ -630,6 +630,9 @@ export function createObservatory(hooks: Hooks): Observatory {
       if (lf) {
         const g = lf.guesses.map((q) => `D${q.dim}·${q.gauss}`).join(" | ") || "none of D2–D6";
         const ab = lf.fit.loss === null ? "absorption: no path crossed a domain" : `absorbs ${(Math.abs(lf.fit.loss) < 5e-4 ? 0 : lf.fit.loss).toFixed(3)}/len`;
+        const sp = lf.delay ? lf.delay.speeds.map((q) => `${q.domain} ×${q.factor.toFixed(2)}`).join(" · ") : "no domain crossed";
+        text(c, "ECHO", 14, botTop + 166, 10, "rgba(180,200,220,0.6)");
+        text(c, `${lf.emitter} echo c ${lf.delay ? lf.delay.c.toFixed(2) : "?"} · speed by domain: ${sp} · fidelity loss ${lf.noise === null ? "no well crossed" : `${(Math.abs(lf.noise) < 5e-4 ? 0 : lf.noise).toFixed(3)}/len`}`, 64, botTop + 166, 11, "rgba(180,200,220,0.85)");
         text(c, "LAWS", 14, botTop + 148, 10, "rgba(180,200,220,0.6)");
         text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} ${trial?.hidden ? "" : ` · declared D${lf.declared.dim}·${lf.declared.gauss}`}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11,
           lf.consistent || trial?.hidden ? "rgba(180,200,220,0.85)" : "#ff4d6d");
@@ -666,7 +669,7 @@ export function createObservatory(hooks: Hooks): Observatory {
     c.font = `400 10px ${FONT}`;
     const maxW = w - 28;
     const words = info.split(" ");
-    let line = "", ly = botTop + 170, lines = 0;
+    let line = "", ly = botTop + 188, lines = 0;
     for (const wd of words) {
       const test = line ? `${line} ${wd}` : wd;
       if (c.measureText(test).width > maxW && line && lines < 1) {

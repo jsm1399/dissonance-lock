@@ -54,3 +54,45 @@ export function consistentLaws(n, tol = 0.05) {
     }
     return out.sort((a, b) => (a.gauss === "holds" ? 0 : 1) - (b.gauss === "holds" ? 0 : 1) || a.dim - b.dim);
 }
+// ---------------------------------------------------------------- echo-speed map and noise
+/** Least squares through the origin for any number of columns; null if singular. */
+export function lsq(cols, y) {
+    const k = cols.length;
+    const A = Array.from({ length: k }, (_, i) => Array.from({ length: k }, (_, j) => cols[i].reduce((a, v, q) => a + v * cols[j][q], 0)));
+    const b = cols.map((c) => c.reduce((a, v, q) => a + v * y[q], 0));
+    return solve(A, b);
+}
+/**
+ * Echo-speed map. lag = D/c + sum_d delta_d x L_d, so a regression on the length spent in each domain gives every
+ * domain's extra delay per unit length, hence its speed relative to the open medium. Clock domains speed echoes up,
+ * shear wells slow them; what an observer sees depends on the laws of time and of the medium.
+ */
+export function fitDelay(samples) {
+    if (samples.length < 8)
+        return null;
+    const ids = [...new Set(samples.flatMap((s) => Object.keys(s.per).filter((k) => s.per[k] > 1e-9)))].sort();
+    const cols = [samples.map((s) => s.D), ...ids.map((id) => samples.map((s) => s.per[id] ?? 0))];
+    const lag = samples.map((s) => s.lag);
+    const x = lsq(cols, lag);
+    if (!x || !(x[0] > 0))
+        return null;
+    const a = x[0];
+    let ss = 0;
+    for (let q = 0; q < samples.length; q++) {
+        const pred = cols.reduce((acc, c, i) => acc + c[q] * x[i], 0);
+        ss += (lag[q] - pred) ** 2;
+    }
+    const speeds = ids.map((domain, i) => ({ domain, factor: a + x[i + 1] > 0 ? a / (a + x[i + 1]) : Infinity }));
+    return { c: 1 / a, speeds, rms: Math.sqrt(ss / samples.length) };
+}
+/** Information loss per unit length inside wells, from fidelity = exp(-noise x length): fit through the origin. */
+export function fitNoise(samples) {
+    let num = 0, den = 0;
+    for (const s of samples) {
+        if (!(s.fidelity > 0))
+            continue;
+        num += s.well * Math.log(s.fidelity);
+        den += s.well * s.well;
+    }
+    return den > 1e-9 ? -num / den : null;
+}
