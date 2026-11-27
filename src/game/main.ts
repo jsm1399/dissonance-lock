@@ -13,6 +13,8 @@ import { sfx } from "./sfx.js";
 import { BRIEFS, driftBrief } from "./lore.js";
 import { createObservatory } from "../lab/observatory.js";
 import { TRIALS } from "../lab/trials.js";
+import { decodeTrial, encodeTrial } from "../lab/forge.js";
+import type { CustomTrial } from "../lab/forge.js";
 import { decodeWorld, encodeWorld, parseWorld } from "../lab/world.js";
 import type { WorldSpec } from "../lab/world.js";
 
@@ -59,6 +61,7 @@ const obs = createObservatory({
   },
   cleared: () => save.trials,
   link: labLink,
+  trialLink: (ct) => `${location.origin}${location.pathname}#t=${encodeTrial(ct)}`,
   copy: async (text) => {
     try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
   },
@@ -82,6 +85,15 @@ function openTrials(): void {
   tutor = null;
   ui.hint = null;
   obs.openTrial(first < 0 ? 0 : first);
+  ui.screen = "lab";
+  sfx.unlock();
+}
+
+function openCustom(ct: CustomTrial): void {
+  game = null;
+  tutor = null;
+  ui.hint = null;
+  obs.openCustom(ct);
   ui.screen = "lab";
   sfx.unlock();
 }
@@ -453,11 +465,18 @@ resize();
   screen: (p: [number, number]) => obs.toScreen(p),
   openLab,
   openTrials,
+  openCustom: (enc: string) => { const ct = decodeTrial(enc); if (ct) openCustom(ct); return ct !== null; },
+  forge: () => obs.forge(),
   trial: () => obs.trialIdx(),
+  trialState: () => obs.trialState(),
 };
 if (location.hash.startsWith("#w=")) {
   const shared = decodeWorld(location.hash.slice(3));
   if (shared) openLab(shared);
+}
+if (location.hash.startsWith("#t=")) {
+  const ct = decodeTrial(location.hash.slice(3));
+  if (ct) openCustom(ct);
 }
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => undefined);
 requestAnimationFrame(frame);

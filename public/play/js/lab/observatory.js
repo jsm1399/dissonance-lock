@@ -6,6 +6,7 @@ import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import { TRIALS } from "./trials.js";
+import { GOAL_KINDS, asTrial, forge, goalProblems, goalTitle, judge, keepOf } from "./forge.js";
 import { nextLaw } from "./lab.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
@@ -33,6 +34,11 @@ export function createObservatory(hooks) {
     /** Calibration Trial in progress: the goal must hold for HOLD seconds */
     let trial = null;
     let attempt = 0;
+    /** a Forge-authored trial being played (idx -1), else null */
+    let custom = null;
+    /** Trial Forge authoring: the goal, the sealed broken start, and the last sealed trial */
+    const fg = { goal: null, start: null, t: 0, last: null, judged: null };
+    const cur = () => custom ?? TRIALS[trial?.idx ?? 0];
     /** the laws the toolbar shows: the player's guess in a hidden-law trial, else the world's */
     const shown = (l) => trial?.guess ?? lawsOf(l.spec);
     const HOLD = 1;
@@ -50,6 +56,7 @@ export function createObservatory(hooks) {
             { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
             { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
             { id: "bulk", label: l.spec.bulk ? "BULK·ON" : "BULK·OFF" },
+            ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}` }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL" }]),
             ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
             { id: "lawful", label: "LAWFUL" },
         ];
@@ -88,7 +95,12 @@ export function createObservatory(hooks) {
     const toWorld = (px, py) => [(px - geo.x0) / geo.s, (py - geo.y0) / geo.s];
     const inWorld = (p) => p[0] >= 0 && p[0] <= SIZE && p[1] >= 0 && p[1] <= SIZE;
     function startTrial(idx) {
-        const n = TRIALS.length, i = ((idx % n) + n) % n, t = TRIALS[i], seed = ++attempt;
+        const n = TRIALS.length, i = ((idx % n) + n) % n;
+        custom = null;
+        begin(TRIALS[i], i);
+    }
+    function begin(t, i) {
+        const seed = ++attempt;
         lab = newLab(t.world(seed));
         lab.t = t.t;
         lastRev = -1;
@@ -99,6 +111,8 @@ export function createObservatory(hooks) {
         toast = null;
         wf.clear();
         trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" }, seed, hidden: t.hidden !== undefined, guess: t.hidden ? { ...LAWFUL } : null };
+        fg.goal = null;
+        fg.start = null;
     }
     function activate(id) {
         const l = lab;
@@ -124,7 +138,10 @@ export function createObservatory(hooks) {
         else if (id === "reset") {
             const keepTool = l.tool;
             if (trial) {
-                startTrial(trial.idx);
+                if (custom)
+                    begin(custom, -1);
+                else
+                    startTrial(trial.idx);
                 say("trial reset");
                 return;
             }
@@ -133,6 +150,10 @@ export function createObservatory(hooks) {
             wf.clear();
             say("world reset");
         }
+        else if (id === "goal")
+            cycleGoal(l);
+        else if (id === "seal")
+            seal(l);
         else if (id === "bulk") {
             const on = toggleBulk(l);
             wf.clear();
@@ -190,6 +211,77 @@ export function createObservatory(hooks) {
             lawStep(id.slice(4));
         else
             l.tool = id;
+    }
+    function cycleGoal(l) {
+        if (trial)
+            return;
+        const order = [null, ...GOAL_KINDS];
+        const next = order[(order.indexOf(fg.goal?.kind ?? null) + 1) % order.length];
+        fg.start = null;
+        fg.judged = null;
+        if (!next) {
+            fg.goal = null;
+            say("forge off");
+            return;
+        }
+        const selE = l.sel?.kind === "emitter" ? l.spec.emitters.find((e) => e.id === l.sel?.id) : undefined;
+        let target;
+        if (next === "conserved")
+            target = (selE ?? l.spec.emitters[0])?.id;
+        if (next === "baseline")
+            target = (selE?.zeta !== undefined ? selE : l.spec.emitters.find((e) => e.zeta !== undefined))?.id;
+        fg.goal = { kind: next, ...(target ? { target } : {}) };
+        const pr = goalProblems(l.spec, fg.goal);
+        say(pr.length ? `${goalTitle(next)}: ${pr[0]}` : `${goalTitle(next)}: break the world, SEAL, repair it, SEAL`);
+    }
+    function seal(l) {
+        const g = fg.goal;
+        if (trial)
+            return;
+        if (!g) {
+            say("pick a GOAL first (F)");
+            return;
+        }
+        const pr = goalProblems(l.spec, g);
+        if (pr.length) {
+            say(pr[0]);
+            return;
+        }
+        if (!fg.start) {
+            const w = judge(JSON.parse(JSON.stringify(l.spec)), g, keepOf(l.spec), Math.round(l.t * 10) / 10);
+            if (w.ok) {
+                say("this world already passes: break it first, then SEAL");
+                return;
+            }
+            fg.start = JSON.parse(JSON.stringify(l.spec));
+            fg.t = l.t;
+            fg.judged = null;
+            say("start sealed · now REPAIR the world, then SEAL again");
+            return;
+        }
+        const r = forge("", g, fg.t, fg.start, l.spec);
+        if (!r.ok) {
+            say(r.why);
+            return;
+        }
+        fg.last = r.trial;
+        fg.start = null;
+        fg.judged = null;
+        const url = hooks.trialLink ? hooks.trialLink(r.trial) : hooks.link(r.trial.world);
+        void hooks.copy(url).then((ok) => say(ok ? "trial link copied: share it" : "copy unavailable"));
+    }
+    /** live verdict for the Forge panel, judged on a neutral lab (what a player of the link would see) */
+    function forgeJudge(l) {
+        const g = fg.goal;
+        const t = fg.start ? Math.round(fg.t * 10) / 10 : Math.round(l.t * 2) / 2;
+        const key = `${l.rev}|${t}|${g.kind}|${g.target ?? ""}|${fg.start ? 1 : 0}`;
+        if (fg.judged?.key === key)
+            return fg.judged.res;
+        const pr = goalProblems(l.spec, g);
+        const spec = JSON.parse(JSON.stringify(l.spec));
+        const res = pr.length ? { ok: false, status: pr[0] } : judge(spec, g, keepOf(fg.start ?? l.spec), t);
+        fg.judged = { key, res };
+        return res;
     }
     function lawStep(k) {
         const l = lab;
@@ -744,15 +836,15 @@ export function createObservatory(hooks) {
     function drawTrial(c, now) {
         if (!trial)
             return;
-        const t = TRIALS[trial.idx], { x0, y0, s } = geo;
+        const t = cur(), { x0, y0, s } = geo;
         const wv = Math.min(SIZE * s - 12, 560), x = x0 + 6, hh = 62, y = y0 + SIZE * s - hh - 6;
-        const cleared = trial.done || (hooks.cleared?.().includes(t.id) ?? false);
+        const cleared = trial.done || (!custom && (hooks.cleared?.().includes(t.id) ?? false));
         c.fillStyle = "rgba(3,5,9,0.88)";
         c.fillRect(x, y, wv, hh);
         const col = trial.done ? "#7fdbca" : "#ffb454";
         c.strokeStyle = col;
         c.strokeRect(x + 0.5, y + 0.5, wv - 1, hh - 1);
-        text(c, `TRIAL ${trial.idx + 1}/${TRIALS.length} · ${t.name.toUpperCase()}${cleared ? "  ✓" : ""}`, x + 10, y + 14, 12, col, "left", "700");
+        text(c, `${custom ? "SHARED TRIAL" : `TRIAL ${trial.idx + 1}/${TRIALS.length}`} · ${t.name.toUpperCase()}${cleared ? "  ✓" : ""}`, x + 10, y + 14, 12, col, "left", "700");
         c.font = `400 10px ${FONT}`;
         const words = t.brief.split(" ");
         let line = "", ly = y + 29, n = 0;
@@ -769,13 +861,28 @@ export function createObservatory(hooks) {
         }
         if (line)
             text(c, line, x + 10, ly, 10, "rgba(220,230,245,0.9)");
-        const st = trial.done ? "✓ CLEARED · Tab: next trial" : trial.res.status;
+        const st = trial.done ? (custom ? "✓ CLEARED · Tab: built-in trials" : "✓ CLEARED · Tab: next trial") : trial.res.status;
         text(c, st, x + 10, y + hh - 9, 10, trial.res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
         if (!trial.done && trial.held > 0) {
             c.fillStyle = "#7fdbca";
             c.fillRect(x, y + hh - 3, wv * Math.min(1, trial.held / HOLD), 2);
         }
         void now;
+    }
+    function drawForge(c, l) {
+        const g = fg.goal;
+        if (!g || trial)
+            return;
+        const { x0, y0, s } = geo;
+        const wv = Math.min(SIZE * s - 12, 560), x = x0 + 6, hh = 48, y = y0 + SIZE * s - hh - 6;
+        const res = forgeJudge(l);
+        c.fillStyle = "rgba(3,5,9,0.88)";
+        c.fillRect(x, y, wv, hh);
+        c.strokeStyle = "#a05aff";
+        c.strokeRect(x + 0.5, y + 0.5, wv - 1, hh - 1);
+        const step = fg.start ? "2/2 REPAIR it, then SEAL: the link is copied" : "1/2 BREAK the world so it fails, then SEAL";
+        text(c, `FORGE · ${goalTitle(g.kind).toUpperCase()}${g.target ? ` · ${g.target}` : ""} · ${step}`, x + 10, y + 14, 10, "#c9a8ff", "left", "700");
+        text(c, `${res.ok ? "✓ passes" : "✗ fails"} · ${res.status}`, x + 10, y + 32, 10, res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
     }
     function drawToolbar(c, l) {
         for (const b of btns) {
@@ -943,9 +1050,15 @@ export function createObservatory(hooks) {
         lab: () => lab,
         view: () => view,
         openTrial(idx) { startTrial(idx); },
+        openCustom(ct) { custom = asTrial(ct); begin(custom, -1); },
+        forge: () => ({ goal: fg.goal, sealed: fg.start !== null, last: fg.last }),
         trialIdx: () => (trial ? trial.idx : null),
+        trialState: () => (trial ? { done: trial.done, ok: trial.res.ok, status: trial.res.status, custom: custom !== null } : null),
         open(spec) {
             trial = null;
+            custom = null;
+            fg.goal = null;
+            fg.start = null;
             loopFrom = null;
             lab = newLab(spec ?? defaultWorld());
             lastRev = -1;
@@ -954,7 +1067,7 @@ export function createObservatory(hooks) {
             scrubbing = false;
             wf.clear();
         },
-        close() { trial = null; lab = null; drag = null; scrubbing = false; wf.clear(); },
+        close() { trial = null; custom = null; lab = null; drag = null; scrubbing = false; wf.clear(); },
         draw(ctx, w, h, now, dt) {
             if (!lab)
                 return;
@@ -971,12 +1084,13 @@ export function createObservatory(hooks) {
                     hooks.onChange(lab.spec);
             }
             if (trial) {
-                trial.res = TRIALS[trial.idx].check(lab, { guess: trial.guess });
+                trial.res = cur().check(lab, { guess: trial.guess });
                 trial.held = trial.res.ok ? trial.held + dt : 0;
                 if (!trial.done && trial.held >= HOLD) {
                     trial.done = true;
                     say("TRIAL CLEARED");
-                    hooks.onTrial?.(TRIALS[trial.idx].id);
+                    if (!custom)
+                        hooks.onTrial?.(cur().id);
                 }
             }
             pumpFields(lab);
@@ -988,6 +1102,8 @@ export function createObservatory(hooks) {
             drawWorld(ctx, lab, now);
             if (trial)
                 drawTrial(ctx, now);
+            else
+                drawForge(ctx, lab);
             drawToolbar(ctx, lab);
             drawBottom(ctx, lab, now);
         },
@@ -1049,10 +1165,16 @@ export function createObservatory(hooks) {
                 }
                 case "tab":
                     if (trial) {
-                        startTrial(trial.idx + (shift ? -1 : 1));
+                        startTrial(custom ? (shift ? -1 : 0) : trial.idx + (shift ? -1 : 1));
                         return true;
                     }
                     return false;
+                case "f":
+                    activate("goal");
+                    return true;
+                case "o":
+                    activate("seal");
+                    return true;
                 case "c": {
                     const sl = l.sel;
                     if (sl?.kind !== "domain")

@@ -201,8 +201,9 @@ const unb64 = (str) => {
     return out;
 };
 const r2 = (x) => Math.round(x * 1000) / 1000;
-export function encodeWorld(spec) {
-    const rounded = {
+/** The spec with every number rounded for a compact, stable link. */
+export function roundWorld(spec) {
+    return {
         v: spec.v, rootSpeed: r2(spec.rootSpeed),
         ...(spec.laws && !isLawful(spec.laws) ? { laws: cloneLaws(spec.laws) } : {}),
         domains: spec.domains.map((d) => ({
@@ -220,7 +221,19 @@ export function encodeWorld(spec) {
         ...(spec.bulk ? { bulk: true } : {}),
         ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),
     };
-    return b64(new TextEncoder().encode(JSON.stringify(rounded)));
+}
+export function encodeWorld(spec) {
+    return b64(new TextEncoder().encode(JSON.stringify(roundWorld(spec))));
+}
+/** Any JSON value <-> base64url (shared by world and trial links). */
+export const packJson = (o) => b64(new TextEncoder().encode(JSON.stringify(o)));
+export function unpackJson(s) {
+    try {
+        return JSON.parse(new TextDecoder().decode(unb64(s)));
+    }
+    catch {
+        return undefined;
+    }
 }
 export function decodeWorld(s) {
     try {

@@ -12,8 +12,10 @@ import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import { TRIALS } from "./trials.js";
+import { GOAL_KINDS, asTrial, forge, goalProblems, goalTitle, judge, keepOf } from "./forge.js";
+import type { CustomTrial, Goal, GoalKind } from "./forge.js";
 import { nextLaw } from "./lab.js";
-import type { TrialState } from "./trials.js";
+import type { Trial, TrialState } from "./trials.js";
 import type { WorldSpec } from "./world.js";
 
 export interface Hooks {
@@ -26,6 +28,8 @@ export interface Hooks {
   onTrial?(id: string): void;
   /** ids of trials already cleared */
   cleared?(): readonly string[];
+  /** the shareable URL for a forged trial */
+  trialLink?(ct: CustomTrial): string;
 }
 
 interface Btn { id: string; label: string; x: number; y: number; w: number; h: number }
@@ -49,7 +53,13 @@ export interface Observatory {
   isOpen(): boolean;
   open(spec?: WorldSpec): void;
   openTrial(idx: number): void;
+  /** run a trial authored with the Forge (from a link) */
+  openCustom(ct: CustomTrial): void;
+  /** Forge authoring state (test/inspection) */
+  forge(): { goal: Goal | null; sealed: boolean; last: CustomTrial | null };
   trialIdx(): number | null;
+  /** progress of the running trial (test/inspection) */
+  trialState(): { done: boolean; ok: boolean; status: string; custom: boolean } | null;
   close(): void;
   draw(ctx: CanvasRenderingContext2D, w: number, h: number, now: number, dt: number): void;
   key(k: string, shift: boolean): boolean;
@@ -76,6 +86,11 @@ export function createObservatory(hooks: Hooks): Observatory {
   /** Calibration Trial in progress: the goal must hold for HOLD seconds */
   let trial: { idx: number; held: number; done: boolean; res: TrialState; seed: number; guess: Laws | null; hidden: boolean } | null = null;
   let attempt = 0;
+  /** a Forge-authored trial being played (idx -1), else null */
+  let custom: Trial | null = null;
+  /** Trial Forge authoring: the goal, the sealed broken start, and the last sealed trial */
+  const fg: { goal: Goal | null; start: WorldSpec | null; t: number; last: CustomTrial | null; judged: { key: string; res: TrialState } | null } = { goal: null, start: null, t: 0, last: null, judged: null };
+  const cur = (): Trial => custom ?? TRIALS[trial?.idx ?? 0];
   /** the laws the toolbar shows: the player's guess in a hidden-law trial, else the world's */
   const shown = (l: Lab): Laws => trial?.guess ?? lawsOf(l.spec);
   const HOLD = 1;
@@ -95,6 +110,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
       { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
       { id: "bulk", label: l.spec.bulk ? "BULK·ON" : "BULK·OFF" },
+      ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}` }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL" }]),
       ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
       { id: "lawful", label: "LAWFUL" },
     ];
@@ -127,11 +143,18 @@ export function createObservatory(hooks: Hooks): Observatory {
   const inWorld = (p: Vec) => p[0] >= 0 && p[0] <= SIZE && p[1] >= 0 && p[1] <= SIZE;
 
   function startTrial(idx: number): void {
-    const n = TRIALS.length, i = ((idx % n) + n) % n, t = TRIALS[i], seed = ++attempt;
+    const n = TRIALS.length, i = ((idx % n) + n) % n;
+    custom = null;
+    begin(TRIALS[i], i);
+  }
+
+  function begin(t: Trial, i: number): void {
+    const seed = ++attempt;
     lab = newLab(t.world(seed));
     lab.t = t.t;
     lastRev = -1; view = "map"; drag = null; scrubbing = false; loopFrom = null; toast = null; wf.clear();
     trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" }, seed, hidden: t.hidden !== undefined, guess: t.hidden ? { ...LAWFUL } : null };
+    fg.goal = null; fg.start = null;
   }
 
   function activate(id: string): void {
@@ -148,12 +171,14 @@ export function createObservatory(hooks: Hooks): Observatory {
       void hooks.copy(hooks.link(l.spec)).then((ok) => say(ok ? "link copied" : "copy unavailable"));
     } else if (id === "reset") {
       const keepTool = l.tool;
-      if (trial) { startTrial(trial.idx); say("trial reset"); return; }
+      if (trial) { if (custom) begin(custom, -1); else startTrial(trial.idx); say("trial reset"); return; }
       lab = newLab(defaultWorld());
       lab.tool = keepTool;
       wf.clear();
       say("world reset");
-    } else if (id === "bulk") {
+    } else if (id === "goal") cycleGoal(l);
+    else if (id === "seal") seal(l);
+    else if (id === "bulk") {
       const on = toggleBulk(l);
       wf.clear();
       say(on ? "bulk ON: a hidden axis (Z / Shift+Z), DIM 3" : "bulk OFF: flat plane");
@@ -182,6 +207,54 @@ export function createObservatory(hooks: Hooks): Observatory {
     }
     else if (id.startsWith("law:")) lawStep(id.slice(4) as LawKey);
     else l.tool = id as Tool;
+  }
+
+  function cycleGoal(l: Lab): void {
+    if (trial) return;
+    const order: (GoalKind | null)[] = [null, ...GOAL_KINDS];
+    const next = order[(order.indexOf(fg.goal?.kind ?? null) + 1) % order.length];
+    fg.start = null; fg.judged = null;
+    if (!next) { fg.goal = null; say("forge off"); return; }
+    const selE = l.sel?.kind === "emitter" ? l.spec.emitters.find((e) => e.id === l.sel?.id) : undefined;
+    let target: string | undefined;
+    if (next === "conserved") target = (selE ?? l.spec.emitters[0])?.id;
+    if (next === "baseline") target = (selE?.zeta !== undefined ? selE : l.spec.emitters.find((e) => e.zeta !== undefined))?.id;
+    fg.goal = { kind: next, ...(target ? { target } : {}) };
+    const pr = goalProblems(l.spec, fg.goal);
+    say(pr.length ? `${goalTitle(next)}: ${pr[0]}` : `${goalTitle(next)}: break the world, SEAL, repair it, SEAL`);
+  }
+
+  function seal(l: Lab): void {
+    const g = fg.goal;
+    if (trial) return;
+    if (!g) { say("pick a GOAL first (F)"); return; }
+    const pr = goalProblems(l.spec, g);
+    if (pr.length) { say(pr[0]); return; }
+    if (!fg.start) {
+      const w = judge(JSON.parse(JSON.stringify(l.spec)) as WorldSpec, g, keepOf(l.spec), Math.round(l.t * 10) / 10);
+      if (w.ok) { say("this world already passes: break it first, then SEAL"); return; }
+      fg.start = JSON.parse(JSON.stringify(l.spec)) as WorldSpec; fg.t = l.t; fg.judged = null;
+      say("start sealed · now REPAIR the world, then SEAL again");
+      return;
+    }
+    const r = forge("", g, fg.t, fg.start, l.spec);
+    if (!r.ok) { say(r.why); return; }
+    fg.last = r.trial; fg.start = null; fg.judged = null;
+    const url = hooks.trialLink ? hooks.trialLink(r.trial) : hooks.link(r.trial.world);
+    void hooks.copy(url).then((ok) => say(ok ? "trial link copied: share it" : "copy unavailable"));
+  }
+
+  /** live verdict for the Forge panel, judged on a neutral lab (what a player of the link would see) */
+  function forgeJudge(l: Lab): TrialState {
+    const g = fg.goal as Goal;
+    const t = fg.start ? Math.round(fg.t * 10) / 10 : Math.round(l.t * 2) / 2;
+    const key = `${l.rev}|${t}|${g.kind}|${g.target ?? ""}|${fg.start ? 1 : 0}`;
+    if (fg.judged?.key === key) return fg.judged.res;
+    const pr = goalProblems(l.spec, g);
+    const spec = JSON.parse(JSON.stringify(l.spec)) as WorldSpec;
+    const res: TrialState = pr.length ? { ok: false, status: pr[0] } : judge(spec, g, keepOf(fg.start ?? l.spec), t);
+    fg.judged = { key, res };
+    return res;
   }
 
   function lawStep(k: LawKey): void {
@@ -526,13 +599,13 @@ export function createObservatory(hooks: Hooks): Observatory {
 
   function drawTrial(c: CanvasRenderingContext2D, now: number): void {
     if (!trial) return;
-    const t = TRIALS[trial.idx], { x0, y0, s } = geo;
+    const t = cur(), { x0, y0, s } = geo;
     const wv = Math.min(SIZE * s - 12, 560), x = x0 + 6, hh = 62, y = y0 + SIZE * s - hh - 6;
-    const cleared = trial.done || (hooks.cleared?.().includes(t.id) ?? false);
+    const cleared = trial.done || (!custom && (hooks.cleared?.().includes(t.id) ?? false));
     c.fillStyle = "rgba(3,5,9,0.88)"; c.fillRect(x, y, wv, hh);
     const col = trial.done ? "#7fdbca" : "#ffb454";
     c.strokeStyle = col; c.strokeRect(x + 0.5, y + 0.5, wv - 1, hh - 1);
-    text(c, `TRIAL ${trial.idx + 1}/${TRIALS.length} · ${t.name.toUpperCase()}${cleared ? "  ✓" : ""}`, x + 10, y + 14, 12, col, "left", "700");
+    text(c, `${custom ? "SHARED TRIAL" : `TRIAL ${trial.idx + 1}/${TRIALS.length}`} · ${t.name.toUpperCase()}${cleared ? "  ✓" : ""}`, x + 10, y + 14, 12, col, "left", "700");
     c.font = `400 10px ${FONT}`;
     const words = t.brief.split(" ");
     let line = "", ly = y + 29, n = 0;
@@ -542,10 +615,23 @@ export function createObservatory(hooks: Hooks): Observatory {
       else line = test;
     }
     if (line) text(c, line, x + 10, ly, 10, "rgba(220,230,245,0.9)");
-    const st = trial.done ? "✓ CLEARED · Tab: next trial" : trial.res.status;
+    const st = trial.done ? (custom ? "✓ CLEARED · Tab: built-in trials" : "✓ CLEARED · Tab: next trial") : trial.res.status;
     text(c, st, x + 10, y + hh - 9, 10, trial.res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
     if (!trial.done && trial.held > 0) { c.fillStyle = "#7fdbca"; c.fillRect(x, y + hh - 3, wv * Math.min(1, trial.held / HOLD), 2); }
     void now;
+  }
+
+  function drawForge(c: CanvasRenderingContext2D, l: Lab): void {
+    const g = fg.goal;
+    if (!g || trial) return;
+    const { x0, y0, s } = geo;
+    const wv = Math.min(SIZE * s - 12, 560), x = x0 + 6, hh = 48, y = y0 + SIZE * s - hh - 6;
+    const res = forgeJudge(l);
+    c.fillStyle = "rgba(3,5,9,0.88)"; c.fillRect(x, y, wv, hh);
+    c.strokeStyle = "#a05aff"; c.strokeRect(x + 0.5, y + 0.5, wv - 1, hh - 1);
+    const step = fg.start ? "2/2 REPAIR it, then SEAL: the link is copied" : "1/2 BREAK the world so it fails, then SEAL";
+    text(c, `FORGE · ${goalTitle(g.kind).toUpperCase()}${g.target ? ` · ${g.target}` : ""} · ${step}`, x + 10, y + 14, 10, "#c9a8ff", "left", "700");
+    text(c, `${res.ok ? "✓ passes" : "✗ fails"} · ${res.status}`, x + 10, y + 32, 10, res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
   }
 
   function drawToolbar(c: CanvasRenderingContext2D, l: Lab): void {
@@ -694,16 +780,19 @@ export function createObservatory(hooks: Hooks): Observatory {
     lab: () => lab,
     view: () => view,
     openTrial(idx) { startTrial(idx); },
+    openCustom(ct) { custom = asTrial(ct); begin(custom, -1); },
+    forge: () => ({ goal: fg.goal, sealed: fg.start !== null, last: fg.last }),
     trialIdx: () => (trial ? trial.idx : null),
+    trialState: () => (trial ? { done: trial.done, ok: trial.res.ok, status: trial.res.status, custom: custom !== null } : null),
     open(spec) {
-      trial = null;
+      trial = null; custom = null; fg.goal = null; fg.start = null;
       loopFrom = null;
       lab = newLab(spec ?? defaultWorld());
       lastRev = -1;
       view = "map";
       drag = null; scrubbing = false; wf.clear();
     },
-    close() { trial = null; lab = null; drag = null; scrubbing = false; wf.clear(); },
+    close() { trial = null; custom = null; lab = null; drag = null; scrubbing = false; wf.clear(); },
     draw(ctx, w, h, now, dt) {
       if (!lab) return;
       if (lab.playing) {
@@ -712,12 +801,12 @@ export function createObservatory(hooks: Hooks): Observatory {
       }
       if (lab.rev !== lastRev) { lastRev = lab.rev; if (!trial) hooks.onChange(lab.spec); }
       if (trial) {
-        trial.res = TRIALS[trial.idx].check(lab, { guess: trial.guess });
+        trial.res = cur().check(lab, { guess: trial.guess });
         trial.held = trial.res.ok ? trial.held + dt : 0;
         if (!trial.done && trial.held >= HOLD) {
           trial.done = true;
           say("TRIAL CLEARED");
-          hooks.onTrial?.(TRIALS[trial.idx].id);
+          if (!custom) hooks.onTrial?.(cur().id);
         }
       }
       pumpFields(lab);
@@ -726,6 +815,7 @@ export function createObservatory(hooks: Hooks): Observatory {
       if (view === "st") drawSpacetime(ctx, lab);
       drawWorld(ctx, lab, now);
       if (trial) drawTrial(ctx, now);
+      else drawForge(ctx, lab);
       drawToolbar(ctx, lab);
       drawBottom(ctx, lab, now);
     },
@@ -757,7 +847,9 @@ export function createObservatory(hooks: Hooks): Observatory {
           else wf.clear();
           return true;
         }
-        case "tab": if (trial) { startTrial(trial.idx + (shift ? -1 : 1)); return true; } return false;
+        case "tab": if (trial) { startTrial(custom ? (shift ? -1 : 0) : trial.idx + (shift ? -1 : 1)); return true; } return false;
+        case "f": activate("goal"); return true;
+        case "o": activate("seal"); return true;
         case "c": {
           const sl = l.sel;
           if (sl?.kind !== "domain") return false;
