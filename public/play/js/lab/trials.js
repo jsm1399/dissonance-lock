@@ -1,4 +1,4 @@
-import { auditEmitter, feedbackAudit, hasFeedback, zetaFix } from "./lab.js";
+import { auditEmitter, feedbackAudit, hasFeedback, triangulate, zetaFix } from "./lab.js";
 import { LAWFUL, LOSS_STEPS, NOISE_STEPS } from "../core/laws/index.js";
 import { rng } from "../game/rng.js";
 import { lawsOf } from "./world.js";
@@ -129,7 +129,37 @@ export const TRIALS = [
             return { ok, status: `guess ${g.time} · ${g.medium} · D${g.dim} · loss ${g.loss} · noise ${g.noise} · ${g.gauss}${ok ? "" : " · measure, then set the knobs"}` };
         },
     },
+    {
+        id: "sightline", name: "Clear Sightline",
+        brief: "A well bends the echoes, so the probe array misreads E. Move the probe until TRI reads FLAT (it then finds E's hidden height). Leave the sky alone.",
+        t: 80,
+        world: sightlineWorld,
+        check(lab) {
+            const base = sightlineWorld();
+            const kept = base.domains.every((b) => {
+                const d = lab.spec.domains.find((x) => x.id === b.id);
+                return d && d.origin[0] === b.origin[0] && d.origin[1] === b.origin[1] && d.extent === b.extent && d.rate === b.rate && d.shearMin === b.shearMin;
+            });
+            if (!kept)
+                return { ok: false, status: "the sky was changed: leave the well and the fast lane where they are" };
+            const tr = triangulate(lab, "E");
+            if (!tr)
+                return { ok: false, status: "array listening…" };
+            return { ok: tr.verdict === "flat", status: `${tr.verdict.toUpperCase()} · misfit ${tr.fix.residual.toFixed(4)}s · reads depth ${tr.fix.depth.toFixed(1)} · need flat` };
+        },
+    },
 ];
+/** Bulk world: E hides 9 above the plane; a shear well sits between it and the default probe, plus a fast lane. */
+function sightlineWorld() {
+    return {
+        v: 1, rootSpeed: 6, bulk: true,
+        domains: [
+            { id: "w", parent: "root", origin: [46, 44], scale: 1, extent: 15, echoSpeed: 6, rate: 1, shearMin: 0.2, changes: [] },
+            { id: "f", parent: "root", origin: [76, 74], scale: 1, extent: 12, echoSpeed: 6, rate: 3, shearMin: null, changes: [] },
+        ],
+        emitters: [em({ id: "E", pos: [20, 25], period: 4, z: 9 })],
+    };
+}
 /** Seeded hidden laws: all six vary (only the path law stays straight). Always at least 3 deviations from lawful. */
 export function hiddenLaws(seed) {
     const r = rng(seed * 2654435761 + 12345);

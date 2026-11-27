@@ -1,7 +1,7 @@
 import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
-import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, triangulate, triSites, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
@@ -12,7 +12,7 @@ const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
     { id: "micro", label: "MICRO" }, { id: "emit", label: "EMIT" }, { id: "relay", label: "RELAY" }, { id: "loop", label: "LOOP" }, { id: "erase", label: "ERASE" },
 ];
-const BOT_H = 222;
+const BOT_H = 240;
 const LAW_HOTKEY = { t: "time", m: "medium", d: "dim", x: "loss", n: "noise", g: "gauss", p: "path" };
 const LAW_TITLE = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", noise: "NOISE", gauss: "GAUSS", path: "PATH" };
 const lawValue = (k, L) => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
@@ -869,6 +869,40 @@ export function createObservatory(hooks) {
         }
         void now;
     }
+    /** the five-probe array and where it thinks the selected emitter is */
+    function drawArray(c, l) {
+        const who = l.sel?.kind === "emitter" ? l.sel.id : trial && cur().id === "sightline" ? "E" : null;
+        if (!who || view !== "map")
+            return;
+        const tri = triangulate(l, who);
+        const { x0, y0, s } = geo, X = (x) => x0 + x * s, Y = (y) => y0 + y * s;
+        const sites = tri?.sites ?? triSites(l);
+        c.strokeStyle = "rgba(255,255,255,0.4)";
+        c.lineWidth = 1;
+        for (const q of sites)
+            c.strokeRect(X(q[0]) - 3, Y(q[1]) - 3, 6, 6);
+        if (!tri)
+            return;
+        const col = tri.verdict === "flat" ? "#7fdbca" : "#ffb454";
+        const ex = X(tri.fix.x), ey = Y(tri.fix.y), p = l.tree.toRootPos(l.spec.emitters.find((q) => q.id === tri.emitter)?.domain ?? "root", emitterPos(l, l.spec.emitters.find((q) => q.id === tri.emitter)));
+        c.strokeStyle = col;
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.moveTo(ex - 5, ey - 5);
+        c.lineTo(ex + 5, ey + 5);
+        c.moveTo(ex + 5, ey - 5);
+        c.lineTo(ex - 5, ey + 5);
+        c.stroke();
+        if (tri.verdict === "warped") {
+            c.setLineDash([3, 3]);
+            c.beginPath();
+            c.moveTo(ex, ey);
+            c.lineTo(X(p[0]), Y(p[1]));
+            c.stroke();
+            c.setLineDash([]);
+        }
+        c.lineWidth = 1;
+    }
     function drawForge(c, l) {
         const g = fg.goal;
         if (!g || trial)
@@ -983,6 +1017,24 @@ export function createObservatory(hooks) {
                 text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} ${trial?.hidden ? "" : ` · declared D${lf.declared.dim}·${lf.declared.gauss}`}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent || trial?.hidden ? "rgba(180,200,220,0.85)" : "#ff4d6d");
             }
         }
+        if (l.sel?.kind === "emitter") {
+            const tr = triangulate(l);
+            let msg = `${l.sel.id} · array of 5 · listening… needs two pulses heard by all five sites`, col = "rgba(180,200,220,0.7)";
+            if (tr) {
+                const f = tr.fix, rate = Number.isFinite(tr.rateEst) ? `×${tr.rateEst.toFixed(2)} (true ×${tr.rateTrue.toFixed(2)})` : "?";
+                const depth = f.depth > 0.5 ? `depth ${f.depth.toFixed(1)} (above or below: unknowable)` : "in the plane";
+                if (tr.verdict === "flat") {
+                    msg = `${tr.emitter} at (${f.x.toFixed(1)}, ${f.y.toFixed(1)}) ${depth} · fired t ${f.t0.toFixed(2)} · clock ${rate} · ✓ flat medium: trust it`;
+                    col = "rgba(127,219,202,0.95)";
+                }
+                else {
+                    msg = `${tr.emitter} ✗ WARPED medium: arrivals misfit ${f.residual.toFixed(3)}s · read (${f.x.toFixed(0)}, ${f.y.toFixed(0)}) is ${tr.errPos.toFixed(0)} off · do not trust`;
+                    col = "#ffb454";
+                }
+            }
+            text(c, "TRI", 14, botTop + 184, 10, "rgba(180,200,220,0.6)");
+            text(c, msg, 64, botTop + 184, 11, col);
+        }
         if (hasZeta(l)) {
             const zf = zetaFix(l);
             let msg = "", col = "rgba(180,200,220,0.7)";
@@ -999,7 +1051,7 @@ export function createObservatory(hooks) {
             text(c, "FIX", 14, botTop + 128, 10, "rgba(180,200,220,0.6)");
             text(c, msg, 64, botTop + 128, 11, col);
         }
-        let info = "Click the world to move the probe. Pick a tool to build. Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
+        let info = "Click the world to move the probe. Pick a tool to build. Select an emitter for TRI · Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
         if (l.sel?.kind === "domain") {
             const d = l.spec.domains.find((q) => q.id === l.sel?.id);
             if (d)
@@ -1021,7 +1073,7 @@ export function createObservatory(hooks) {
         c.font = `400 10px ${FONT}`;
         const maxW = w - 28;
         const words = info.split(" ");
-        let line = "", ly = botTop + 188, lines = 0;
+        let line = "", ly = botTop + 208, lines = 0;
         for (const wd of words) {
             const test = line ? `${line} ${wd}` : wd;
             if (c.measureText(test).width > maxW && line && lines < 1) {
@@ -1100,6 +1152,7 @@ export function createObservatory(hooks) {
             if (view === "st")
                 drawSpacetime(ctx, lab);
             drawWorld(ctx, lab, now);
+            drawArray(ctx, lab);
             if (trial)
                 drawTrial(ctx, now);
             else

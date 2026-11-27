@@ -1,5 +1,5 @@
-import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
-import type { Arrival, ArrivalField, BeaconFix, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
+import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, locateSource, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
+import type { Arrival, ArrivalField, BeaconFix, LocateFix, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitDelay, fitNoise, fitSpreading } from "../core/laws/index.js";
 import type { DelayFit, LawGuess, Laws, RayAudit, SpreadFit } from "../core/laws/index.js";
 import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
@@ -63,6 +63,8 @@ export interface Lab {
   fbAudit: { key: string; value: FbAudit } | null;
   /** law inference for one emitter, keyed by rev and emitter */
   lawFit: { key: string; value: LawFitResult | null } | null;
+  /** array triangulation, keyed by rev, emitter, probe and scrub time */
+  tri: { key: string; value: TriResult | null } | null;
 }
 
 export interface FbCache { result: FbResult; byNode: Map<string, FbEcho[]>; byKey: Map<string, FbEcho> }
@@ -81,7 +83,7 @@ export function newLab(spec: WorldSpec = defaultWorld()): Lab {
   }
   return {
     spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, sel: null, tool: "select",
-    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null, lawFit: null,
+    seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null, lawFit: null, tri: null,
   };
 }
 
@@ -141,6 +143,7 @@ export function rebuild(lab: Lab): void {
   lab.fb = null;
   lab.fbAudit = null;
   lab.lawFit = null;
+  lab.tri = null;
   lab.rev++;
 }
 
@@ -767,5 +770,74 @@ export function lawFit(lab: Lab, emitterId?: string): LawFitResult | null {
     consistent: consistentLaws(fit.n, 0.08).some((g) => g.dim === laws.dim && g.gauss === laws.gauss),
   } : null;
   lab.lawFit = { key, value };
+  return value;
+}
+
+// ---------- array triangulation (several probes) ----------
+export const TRI_R = 16;
+/** Residual below this (seconds, RMS) means the arrivals are consistent with a flat uniform medium. */
+export const TRI_FLAT = 1e-4;
+
+export interface TriResult {
+  emitter: string;
+  /** the five array sites (root plane coordinates): the probe and four around it */
+  sites: [number, number][];
+  /** the latest pulse heard by every site, and its predecessor */
+  k: number;
+  fix: LocateFix;
+  /** truth, for the Observatory's own scoreboard */
+  truth: { x: number; y: number; depth: number; t0: number };
+  /** in-plane position error, depth error (both root units), emission-time error (s) */
+  errPos: number;
+  errDepth: number;
+  errT0: number;
+  /** emitter clock rate (local s per root s) recovered from two consecutive solved emission times, and the real one */
+  rateEst: number;
+  rateTrue: number;
+  /** flat: the uniform-medium model explains the arrivals; warped: it does not, so the numbers above are unreliable */
+  verdict: "flat" | "warped";
+}
+
+/** The probe plus four neighbours at distance TRI_R, kept inside the world. */
+export function triSites(lab: Lab): [number, number][] {
+  const cx = clamp(lab.probe[0], TRI_R, SIZE - TRI_R), cy = clamp(lab.probe[1], TRI_R, SIZE - TRI_R);
+  return [[cx, cy], [cx + TRI_R, cy], [cx - TRI_R, cy], [cx, cy + TRI_R], [cx, cy - TRI_R]];
+}
+
+/**
+ * Locate an emitter with an ARRAY of five probes: from the arrival times of two consecutive pulses alone (assuming a
+ * flat uniform medium at the root speed) recover its position, its distance from the plane (never its sign), the
+ * moment it fired, and, from the two firing times, the rate of its clock. The misfit says whether to trust it.
+ */
+export function triangulate(lab: Lab, emitterId?: string): TriResult | null {
+  const id = emitterId ?? (lab.sel?.kind === "emitter" ? lab.sel.id : undefined);
+  const e = lab.spec.emitters.find((x) => x.id === id);
+  if (!e) return null;
+  const key = `${lab.rev}|${e.id}|${lab.probe[0]}|${lab.probe[1]}|${lab.probeZ}|${Math.round(lab.t * 2)}`;
+  if (lab.tri && lab.tri.key === key) return lab.tri.value;
+  const sites = triSites(lab), z = lab.spec.bulk ? lab.probeZ : 0;
+  const from = { domain: e.domain, pos: emitterPos(lab, e) };
+  const arrive = (em: Emission): number[] => sites.map((s) => march(lab.tree, from, em.launchLocal, { domain: "root", pos: lab.spec.bulk ? [s[0], s[1], z] : s }, MARCH).rootTime);
+  const ems = emissionsUpTo(lab, lab.t, 14).filter((m) => m.emitter === e.id && m.k < FB_BASE).sort((a, b) => b.k - a.k);
+  let value: TriResult | null = null;
+  for (let i = 0; i + 1 < ems.length && !value; i++) {
+    const a = ems[i], b = ems[i + 1];
+    if (b.k !== a.k - 1) continue;
+    const ta = arrive(a), tb = arrive(b);
+    if (ta.some((x) => x > lab.t) || tb.some((x) => x > lab.t)) continue;
+    const fa = locateSource(sites, ta, lab.spec.rootSpeed), fb = locateSource(sites, tb, lab.spec.rootSpeed);
+    if (!fa || !fb) continue;
+    const p = lab.tree.toRootPos(e.domain, emitterPos(lab, e));
+    const truth = { x: p[0], y: p[1], depth: Math.abs((p[2] ?? 0) - z), t0: a.launchRoot };
+    const dom = lab.tree.get(e.domain);
+    const dRoot = fa.t0 - fb.t0, dLocal = a.launchLocal - b.launchLocal;
+    value = {
+      emitter: e.id, sites, k: a.k, fix: fa, truth,
+      errPos: Math.hypot(fa.x - truth.x, fa.y - truth.y), errDepth: Math.abs(fa.depth - truth.depth), errT0: Math.abs(fa.t0 - truth.t0),
+      rateEst: dRoot > 1e-9 ? dLocal / dRoot : NaN, rateTrue: lab.tree.rateToRoot(dom, (a.launchRoot + b.launchRoot) / 2),
+      verdict: fa.converged && fb.converged && Math.max(fa.residual, fb.residual) <= TRI_FLAT ? "flat" : "warped",
+    };
+  }
+  lab.tri = { key, value };
   return value;
 }
