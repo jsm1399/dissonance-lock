@@ -1,4 +1,4 @@
-const CACHE = "dissonance-lock-v1.16";
+const CACHE = "dissonance-lock-v1.17";
 const ASSETS = [
   "./",
   "./index.html",

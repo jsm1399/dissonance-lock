@@ -1,6 +1,6 @@
 import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, locateND, locateSource, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitDelay, fitNoise, fitSpreading } from "../core/laws/index.js";
-import { LIMITS, buildTree, defaultWorld, lawsOf, wellIds } from "./world.js";
+import { LIMITS, buildTree, defaultWorld, hiddenAxes, lawsOf, wellIds } from "./world.js";
 import { isLawful } from "../core/laws/index.js";
 export const SIZE = 100;
 export const TMAX = 240;
@@ -16,16 +16,21 @@ export function newLab(spec = defaultWorld()) {
             seq = Math.max(seq, n + 1);
     }
     return {
-        spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, sel: null, tool: "select",
+        spec, tree: buildTree(spec), t: 0, playing: false, speedIdx: 2, probe: [50, 50], probeZ: 0, probeW: 0, sel: null, tool: "select",
         seq, heat: null, rev: 0, arrivals: new Map(), rays: new Map(), fields: new Map(), bent: new Map(), pending: 0, launches: new Map(), fb: null, fbAudit: null, lawFit: null, tri: null,
     };
 }
 // ---------- bulk (hidden third dimension) ----------
 /** A point of the plane, lifted into the tree's dimension. */
-export const at3 = (lab, p) => (lab.spec.bulk ? [p[0], p[1], 0] : [p[0], p[1]]);
-/** Emitter site in its domain's own coordinates (3D when the world is bulk). */
-export const emitterPos = (lab, e) => (lab.spec.bulk ? [e.pos[0], e.pos[1], e.z ?? 0] : e.pos);
-export const probeSite = (lab) => (lab.spec.bulk ? [lab.probe[0], lab.probe[1], lab.probeZ] : lab.probe);
+export const at3 = (lab, p) => [p[0], p[1], ...Array.from({ length: hiddenAxes(lab.spec) }, () => 0)];
+/** Emitter site in its domain's own coordinates (3D / 4D when the world has hidden axes). */
+export const emitterPos = (lab, e) => {
+    const h = hiddenAxes(lab.spec);
+    return h === 0 ? e.pos : h === 1 ? [e.pos[0], e.pos[1], e.z ?? 0] : [e.pos[0], e.pos[1], e.z ?? 0, e.w ?? 0];
+};
+/** The probe's hidden coordinates (none, z, or z and w). */
+export const probeHidden = (lab) => [lab.probeZ, lab.probeW].slice(0, hiddenAxes(lab.spec));
+export const probeSite = (lab) => [lab.probe[0], lab.probe[1], ...probeHidden(lab)];
 /** Straight-line root distance between two root-frame points of the tree's dimension. */
 export const dist = (a, b) => Math.hypot(...a.map((x, i) => x - (b[i] ?? 0)));
 export const DEPTH_MAX = 40;
@@ -33,10 +38,14 @@ export const DEPTH_MAX = 40;
 export function toggleBulk(lab) {
     if (lab.spec.bulk) {
         delete lab.spec.bulk;
-        for (const e of lab.spec.emitters)
+        delete lab.spec.bulk2;
+        for (const e of lab.spec.emitters) {
             delete e.z;
+            delete e.w;
+        }
         lab.probeZ = 0;
-        if (lab.spec.laws && lab.spec.laws.dim === 3)
+        lab.probeW = 0;
+        if (lab.spec.laws && (lab.spec.laws.dim === 3 || lab.spec.laws.dim === 4))
             lab.spec.laws = { ...lab.spec.laws, dim: 2 };
     }
     else {
@@ -50,12 +59,35 @@ export function toggleBulk(lab) {
     rebuild(lab);
     return lab.spec.bulk === true;
 }
-/** Move the selection along the hidden axis by `dz` (emitters and the probe). False if not allowed. */
-export function setDepth(lab, sel, dz) {
-    if (!lab.spec.bulk)
+/**
+ * Step the hidden dimensions: flat -> one hidden axis (3D) -> two (4D) -> flat. Space of D dimensions wants flux
+ * ~ r^-(D-1), so a lawful world's DIM follows (2, 3, 4). Returns the number of hidden axes now.
+ */
+export function cycleBulk(lab) {
+    const h = hiddenAxes(lab.spec);
+    if (h === 0 || h === 2) {
+        toggleBulk(lab);
+        return hiddenAxes(lab.spec);
+    }
+    lab.spec.bulk2 = true;
+    const cur = lawsOf(lab.spec);
+    if (cur.dim === 3)
+        lab.spec.laws = { ...cur, dim: 4 };
+    if (lab.spec.laws && isLawful(lab.spec.laws))
+        delete lab.spec.laws;
+    rebuild(lab);
+    return 2;
+}
+/** Move the selection along a hidden axis by `dz` (emitters and the probe). False if not allowed. */
+export function setDepth(lab, sel, dz, axis = "z") {
+    const h = hiddenAxes(lab.spec);
+    if (h === 0 || (axis === "w" && h < 2))
         return false;
     if (sel.kind === "probe") {
-        lab.probeZ = clamp(lab.probeZ + dz, -DEPTH_MAX, DEPTH_MAX);
+        if (axis === "z")
+            lab.probeZ = clamp(lab.probeZ + dz, -DEPTH_MAX, DEPTH_MAX);
+        else
+            lab.probeW = clamp(lab.probeW + dz, -DEPTH_MAX, DEPTH_MAX);
         lab.arrivals.clear();
         lab.rays.clear();
         lab.bent.clear();
@@ -66,11 +98,17 @@ export function setDepth(lab, sel, dz) {
     const e = lab.spec.emitters.find((x) => x.id === sel.id);
     if (!e)
         return false;
-    const z = clamp((e.z ?? 0) + dz, -DEPTH_MAX, DEPTH_MAX);
-    if (z === 0)
-        delete e.z;
+    const v = clamp((axis === "z" ? e.z ?? 0 : e.w ?? 0) + dz, -DEPTH_MAX, DEPTH_MAX);
+    if (axis === "z") {
+        if (v === 0)
+            delete e.z;
+        else
+            e.z = v;
+    }
+    else if (v === 0)
+        delete e.w;
     else
-        e.z = z;
+        e.w = v;
     rebuild(lab);
     return true;
 }
@@ -722,7 +760,7 @@ export function lawFit(lab, emitterId) {
             const x = from[0] + r * Math.cos(th), y = from[1] + r * Math.sin(th);
             if (x < 0 || x > SIZE || y < 0 || y > SIZE)
                 continue;
-            const site = lab.spec.bulk ? [x, y, lab.probeZ] : [x, y];
+            const site = [x, y, ...probeHidden(lab)];
             const ray = march(lab.tree, { domain: e.domain, pos: here }, 0, { domain: "root", pos: site }, MARCH);
             const rr = dist(from, site);
             const a = auditRay(laws, ray.segments, wells, ENERGY, rr);
@@ -765,18 +803,22 @@ export function triSites(lab) {
  * Locate an emitter with an ARRAY of five probes: from the arrival times of two consecutive pulses alone (assuming a
  * flat uniform medium at the root speed) recover its position, its distance from the plane (never its sign), the
  * moment it fired, and, from the two firing times, the rate of its clock. The misfit says whether to trust it.
+ * With hidden axes, further arrays lifted TRI_LIFT along each one resolve the SIGNED hidden coordinates (one lifted
+ * array per hidden axis: three arrays fix a 4D source completely).
  */
 export function triangulate(lab, emitterId) {
     const id = emitterId ?? (lab.sel?.kind === "emitter" ? lab.sel.id : undefined);
     const e = lab.spec.emitters.find((x) => x.id === id);
     if (!e)
         return null;
-    const key = `${lab.rev}|${e.id}|${lab.probe[0]}|${lab.probe[1]}|${lab.probeZ}|${Math.round(lab.t * 2)}`;
+    const key = `${lab.rev}|${e.id}|${lab.probe[0]}|${lab.probe[1]}|${lab.probeZ}|${lab.probeW}|${Math.round(lab.t * 2)}`;
     if (lab.tri && lab.tri.key === key)
         return lab.tri.value;
-    const sites = triSites(lab), z = lab.spec.bulk ? lab.probeZ : 0;
+    const sites = triSites(lab), gp = probeHidden(lab), hid = gp.length;
     const from = { domain: e.domain, pos: emitterPos(lab, e) };
-    const arrive = (em) => sites.map((s) => march(lab.tree, from, em.launchLocal, { domain: "root", pos: lab.spec.bulk ? [s[0], s[1], z] : s }, MARCH).rootTime);
+    const at = (g) => (em) => sites.map((s) => march(lab.tree, from, em.launchLocal, { domain: "root", pos: [s[0], s[1], ...g] }, MARCH).rootTime);
+    const arrive = at(gp);
+    const lifts = gp.map((_, k) => gp.map((v, j) => (j === k ? v + TRI_LIFT : v)));
     const ems = emissionsUpTo(lab, lab.t, 14).filter((m) => m.emitter === e.id && m.k < FB_BASE).sort((a, b) => b.k - a.k);
     let value = null;
     for (let i = 0; i + 1 < ems.length && !value; i++) {
@@ -790,16 +832,27 @@ export function triangulate(lab, emitterId) {
         if (!fa || !fb)
             continue;
         const p = lab.tree.toRootPos(e.domain, emitterPos(lab, e));
-        const truth = { x: p[0], y: p[1], depth: Math.abs((p[2] ?? 0) - z), t0: a.launchRoot };
+        const dep = Math.hypot(...gp.map((g, k) => (p[2 + k] ?? 0) - g));
+        const truth = { x: p[0], y: p[1], depth: dep, t0: a.launchRoot };
         const dom = lab.tree.get(e.domain);
         let lift = null;
-        if (lab.spec.bulk) {
-            const sites3 = [...sites.map((q) => [q[0], q[1], z]), ...sites.map((q) => [q[0], q[1], z + TRI_LIFT])];
-            const up = sites.map((q) => march(lab.tree, from, a.launchLocal, { domain: "root", pos: [q[0], q[1], z + TRI_LIFT] }, MARCH).rootTime);
-            const arr = [...ta, ...up];
-            const f3 = up.every((x) => x <= lab.t) ? locateND(sites3, arr, lab.spec.rootSpeed) : null;
-            if (f3)
-                lift = { z: f3.pos[2], errZ: Math.abs(f3.pos[2] - (p[2] ?? 0)), residual: f3.residual };
+        if (hid > 0) {
+            const sitesN = sites.map((q) => [q[0], q[1], ...gp]);
+            const arr = [...ta];
+            let heardAll = true;
+            for (const g of lifts) {
+                for (const q of sites)
+                    sitesN.push([q[0], q[1], ...g]);
+                const up = at(g)(a);
+                if (up.some((x) => x > lab.t))
+                    heardAll = false;
+                arr.push(...up);
+            }
+            const fN = heardAll ? locateND(sitesN, arr, lab.spec.rootSpeed) : null;
+            if (fN) {
+                const err = fN.pos.slice(2).map((v, k) => Math.abs(v - (p[2 + k] ?? 0)));
+                lift = { z: fN.pos[2], ...(hid > 1 ? { w: fN.pos[3] } : {}), errZ: err[0], ...(hid > 1 ? { errW: err[1] } : {}), residual: fN.residual };
+            }
         }
         const dRoot = fa.t0 - fb.t0, dLocal = a.launchLocal - b.launchLocal;
         value = {

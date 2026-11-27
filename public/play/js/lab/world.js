@@ -1,5 +1,7 @@
 import { StrataTree } from "../core/strata/index.js";
 import { LAWFUL, cloneLaws, isLawful, parseLaws, validateLaws } from "../core/laws/index.js";
+/** Number of hidden axes (0, 1 or 2): the world has 2 + this many dimensions. */
+export const hiddenAxes = (spec) => (spec.bulk ? 1 : 0) + (spec.bulk && spec.bulk2 ? 1 : 0);
 export const lawsOf = (spec) => spec.laws ?? LAWFUL;
 export const LIMITS = { domains: 24, emitters: 24, changes: 8, cuts: 24, fbDelay: 30, fbGain: 4, zetaMin: 0.2, zetaMax: 5 };
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
@@ -59,9 +61,15 @@ export function validate(spec) {
             errs.push(`emitter ${e.id}: bad hue`);
         if (e.z !== undefined && (!fin(e.z) || Math.abs(e.z) > 200 || (!spec.bulk && e.z !== 0)))
             errs.push(`emitter ${e.id}: bad depth`);
+        if (e.w !== undefined && (!fin(e.w) || Math.abs(e.w) > 200 || (!spec.bulk2 && e.w !== 0)))
+            errs.push(`emitter ${e.id}: bad second depth`);
     }
     if (spec.bulk !== undefined && spec.bulk !== true)
         errs.push("bulk must be true or absent");
+    if (spec.bulk2 !== undefined && spec.bulk2 !== true)
+        errs.push("bulk2 must be true or absent");
+    if (spec.bulk2 && !spec.bulk)
+        errs.push("bulk2 needs bulk");
     const byId = new Map(spec.emitters.map((e) => [e.id, e]));
     for (const e of spec.emitters) {
         if (e.relay === undefined)
@@ -113,8 +121,8 @@ export function validate(spec) {
 /** Build the strata under the world's laws: same data, different physics. */
 export function buildTree(spec) {
     const laws = lawsOf(spec);
-    const bulk = spec.bulk === true;
-    const t = new StrataTree(bulk ? 3 : 2, spec.rootSpeed);
+    const hid = hiddenAxes(spec), pad = Array.from({ length: hid }, () => 0);
+    const t = new StrataTree(2 + hid, spec.rootSpeed);
     const globalTime = laws.time === "global", uniform = laws.medium === "uniform";
     for (const d of spec.domains) {
         const radLocal = d.extent * d.scale;
@@ -122,7 +130,7 @@ export function buildTree(spec) {
         // uniform medium: pick the local echo speed that makes the ROOT speed equal rootSpeed everywhere
         const rplChild = t.get(d.parent).rootPerLocal / d.scale;
         t.add({
-            id: d.id, parent: d.parent, origin: bulk ? [d.origin[0], d.origin[1], 0] : d.origin, scale: d.scale, extent: d.extent,
+            id: d.id, parent: d.parent, origin: hid > 0 ? [d.origin[0], d.origin[1], ...pad] : d.origin, scale: d.scale, extent: d.extent,
             echoSpeed: uniform ? spec.rootSpeed / rplChild : d.echoSpeed, rate: globalTime ? 1 : d.rate,
             shear: sm === null ? undefined : (p) => sm + (1 - sm) * Math.min(1, Math.hypot(...p) / radLocal),
         });
@@ -169,12 +177,14 @@ export function parseWorld(raw) {
             emitters: j.emitters.map((e) => ({
                 id: String(e.id), domain: String(e.domain), pos: e.pos, period: e.period, phase: e.phase, hue: e.hue,
                 ...(e.z === undefined ? {} : { z: e.z }),
+                ...(e.w === undefined ? {} : { w: e.w }),
                 ...(e.zeta === undefined ? {} : { zeta: e.zeta }),
                 ...(e.fb === undefined ? {} : { fb: e.fb && typeof e.fb === "object" ? { from: String(e.fb.from), delay: e.fb.delay, gain: e.fb.gain } : e.fb }),
                 ...(e.relay === undefined ? {} : { relay: e.relay && typeof e.relay === "object" ? { from: String(e.relay.from), delay: e.relay.delay } : e.relay }),
             })),
             ...(isLawful(laws) ? {} : { laws }),
             ...(j.bulk === undefined ? {} : { bulk: j.bulk }),
+            ...(j.bulk2 === undefined ? {} : { bulk2: j.bulk2 }),
             ...(Array.isArray(j.cuts) && j.cuts.length > 0 ? { cuts: j.cuts.map((c) => ({ emitter: String(c?.emitter), k: c?.k })) } : {}),
         };
         if (validate(spec).length > 0)
@@ -215,10 +225,12 @@ export function roundWorld(spec) {
             ...e, pos: [r2(e.pos[0]), r2(e.pos[1])], period: r2(e.period), phase: r2(e.phase), hue: Math.round(e.hue),
             ...(e.relay ? { relay: { from: e.relay.from, delay: r2(e.relay.delay) } } : {}),
             ...(e.z !== undefined ? { z: r2(e.z) } : {}),
+            ...(e.w !== undefined ? { w: r2(e.w) } : {}),
             ...(e.zeta !== undefined ? { zeta: r2(e.zeta) } : {}),
             ...(e.fb ? { fb: { from: e.fb.from, delay: r2(e.fb.delay), gain: r2(e.fb.gain) } } : {}),
         })),
         ...(spec.bulk ? { bulk: true } : {}),
+        ...(spec.bulk && spec.bulk2 ? { bulk2: true } : {}),
         ...(spec.cuts && spec.cuts.length > 0 ? { cuts: spec.cuts.map((c) => ({ emitter: c.emitter, k: c.k })) } : {}),
     };
 }

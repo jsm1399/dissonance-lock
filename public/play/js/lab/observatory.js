@@ -1,7 +1,7 @@
 import { contour, sliceWavefront, wavefront } from "../core/strata/index.js";
 import { FONT, hsl, text } from "../game/render.js";
 import { LAWFUL } from "../core/laws/index.js";
-import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, triangulate, triSites, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, toggleBulk, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
+import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, triangulate, triSites, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, cycleBulk, probeSite, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
@@ -18,7 +18,7 @@ const LAW_TITLE = { time: "TIME", medium: "MEDIUM", dim: "DIM", loss: "LOSS", no
 const lawValue = (k, L) => (k === "dim" ? String(L.dim) : String(L[k]).toUpperCase());
 const lawLabel = (k, L) => `${LAW_TITLE[k]}·${lawValue(k, L)}`;
 const lawIsDefault = (k, L) => L[k] === LAWFUL[k];
-const probeSiteOf = (l) => (l.spec.bulk ? [l.probe[0], l.probe[1], l.probeZ] : [l.probe[0], l.probe[1]]);
+const probeSiteOf = (l) => [...probeSite(l)];
 const sci = (x) => (x === 0 ? "0" : Math.abs(x) >= 0.01 && Math.abs(x) < 1000 ? x.toPrecision(3) : x.toExponential(1));
 export function createObservatory(hooks) {
     let lab = null;
@@ -55,7 +55,7 @@ export function createObservatory(hooks) {
             { id: "zeta", label: "ZETA" }, { id: "cut", label: "CUT" }, { id: "uncut", label: l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT" },
             { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
             { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
-            { id: "bulk", label: l.spec.bulk ? "BULK·ON" : "BULK·OFF" },
+            { id: "bulk", label: l.spec.bulk ? (l.spec.bulk2 ? "BULK·4D" : "BULK·3D") : "BULK·OFF" },
             ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}` }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL" }]),
             ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
             { id: "lawful", label: "LAWFUL" },
@@ -155,9 +155,9 @@ export function createObservatory(hooks) {
         else if (id === "seal")
             seal(l);
         else if (id === "bulk") {
-            const on = toggleBulk(l);
+            const h = cycleBulk(l);
             wf.clear();
-            say(on ? "bulk ON: a hidden axis (Z / Shift+Z), DIM 3" : "bulk OFF: flat plane");
+            say(h === 0 ? "bulk OFF: flat plane" : h === 1 ? "bulk 3D: a hidden axis (Z / Shift+Z), DIM 3" : "bulk 4D: a second hidden axis (I / Shift+I), DIM 4");
         }
         else if (id === "zeta") {
             const sl = l.sel;
@@ -562,6 +562,17 @@ export function createObservatory(hooks) {
                 c.setLineDash([]);
                 text(c, `z${up ? "+" : ""}${e.z.toFixed(0)}`, cx + 4 * s, cy + (up ? -len : len), 9, hsl(e.hue, 80, 78), "left");
             }
+            if (l.spec.bulk2 && Math.abs(e.w ?? 0) > 1e-9) {
+                const right = e.w > 0, len = Math.min(16, Math.abs(e.w) * 0.4) * s;
+                c.strokeStyle = hsl(e.hue, 60, 65, 0.7);
+                c.setLineDash([2, 2]);
+                c.beginPath();
+                c.moveTo(cx, cy);
+                c.lineTo(cx + (right ? len : -len), cy);
+                c.stroke();
+                c.setLineDash([]);
+                text(c, `w${right ? "+" : ""}${e.w.toFixed(0)}`, cx + (right ? len : -len), cy + 9, 9, hsl(e.hue, 80, 78), right ? "left" : "right");
+            }
             c.beginPath();
             c.arc(cx, cy, 2.2 * s, 0, Math.PI * 2);
             c.fillStyle = hsl(e.hue, 80, 60, 0.16);
@@ -592,6 +603,8 @@ export function createObservatory(hooks) {
         c.lineWidth = 1;
         if (l.spec.bulk && Math.abs(l.probeZ) > 1e-9)
             text(c, `z${l.probeZ > 0 ? "+" : ""}${l.probeZ.toFixed(0)}`, px + pr * 2, py - pr * 1.6, 9, "#fff", "left");
+        if (l.spec.bulk2 && Math.abs(l.probeW) > 1e-9)
+            text(c, `w${l.probeW > 0 ? "+" : ""}${l.probeW.toFixed(0)}`, px + pr * 2, py + pr * 2.2, 9, "#fff", "left");
         // selection ring
         if (l.sel) {
             let sp = null, sr = 3 * s;
@@ -1022,7 +1035,8 @@ export function createObservatory(hooks) {
             let msg = `${l.sel.id} · array of 5 · listening… needs two pulses heard by all five sites`, col = "rgba(180,200,220,0.7)";
             if (tr) {
                 const f = tr.fix, rate = Number.isFinite(tr.rateEst) ? `×${tr.rateEst.toFixed(2)} (true ×${tr.rateTrue.toFixed(2)})` : "?";
-                const depth = tr.lift ? `height ${tr.lift.z >= 0 ? "+" : ""}${tr.lift.z.toFixed(1)} (sign known: lifted array)` : f.depth > 0.5 ? `depth ${f.depth.toFixed(1)} (above or below: unknowable)` : "in the plane";
+                const sg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+                const depth = tr.lift ? `height z ${sg(tr.lift.z)}${tr.lift.w === undefined ? "" : ` w ${sg(tr.lift.w)}`} (signs known: lifted arrays)` : f.depth > 0.5 ? `depth ${f.depth.toFixed(1)} (above or below: unknowable)` : "in the plane";
                 if (tr.verdict === "flat") {
                     msg = `${tr.emitter} at (${f.x.toFixed(1)}, ${f.y.toFixed(1)}) ${depth} · fired t ${f.t0.toFixed(2)} · clock ${rate} · ✓ flat medium: trust it`;
                     col = "rgba(127,219,202,0.95)";
@@ -1051,7 +1065,7 @@ export function createObservatory(hooks) {
             text(c, "FIX", 14, botTop + 128, 10, "rgba(180,200,220,0.6)");
             text(c, msg, 64, botTop + 128, 11, col);
         }
-        let info = "Click the world to move the probe. Pick a tool to build. Select an emitter for TRI · Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk · Z depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
+        let info = "Click the world to move the probe. Pick a tool to build. Select an emitter for TRI · Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk 3D/4D · Z/I depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
         if (l.sel?.kind === "domain") {
             const d = l.spec.domains.find((q) => q.id === l.sel?.id);
             if (d)
@@ -1189,15 +1203,22 @@ export function createObservatory(hooks) {
                 case "b":
                     activate("bulk");
                     return true;
-                case "z": {
+                case "z":
+                case "i": {
+                    const ax = k === "i" ? "w" : "z";
                     if (!l.spec.bulk) {
                         say("bulk is off: press B for a hidden axis");
                         return true;
                     }
+                    if (ax === "w" && !l.spec.bulk2) {
+                        say("press B again for a second hidden axis (4D)");
+                        return true;
+                    }
                     const sel = l.sel && l.sel.kind !== "domain" ? l.sel : { kind: "probe", id: "probe" };
-                    setDepth(l, sel, shift ? -4 : 4);
+                    setDepth(l, sel, shift ? -4 : 4, ax);
                     wf.clear();
-                    say(`${sel.id} depth ${sel.kind === "probe" ? l.probeZ : (l.spec.emitters.find((q) => q.id === sel.id)?.z ?? 0)}`);
+                    const e = l.spec.emitters.find((q) => q.id === sel.id);
+                    say(`${sel.id} ${ax} ${sel.kind === "probe" ? (ax === "z" ? l.probeZ : l.probeW) : ((ax === "z" ? e?.z : e?.w) ?? 0)}`);
                     return true;
                 }
                 case "q":

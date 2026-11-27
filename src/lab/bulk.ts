@@ -1,4 +1,4 @@
-import { emissionsUpTo, emitterPos, arrivalAt } from "./lab.js";
+import { emissionsUpTo, emitterPos, arrivalAt, probeHidden } from "./lab.js";
 import type { Lab } from "./lab.js";
 
 export interface Depth {
@@ -32,6 +32,6 @@ export function apparentDepth(lab: Lab, emitterId: string): Depth | null {
   const lag = heard.arrival - heard.m.launchRoot;
   const v = lab.spec.rootSpeed;
   const apparent = Math.sqrt(Math.max(0, (v * lag) ** 2 - planar ** 2));
-  const actual = Math.abs(p[2] - lab.probeZ);
+  const actual = Math.hypot(...probeHidden(lab).map((g, k) => (p[2 + k] ?? 0) - g));
   return { emitter: emitterId, apparent, actual, planar, lag };
 }
