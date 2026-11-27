@@ -87,3 +87,91 @@ export function locateSource(sites: readonly (readonly number[])[], arrivals: re
   const [x, y, q, t0] = best.p;
   return { x, y, depth: Math.sqrt(q), t0, residual: Math.sqrt(best.cost / m), converged: best.ok };
 }
+
+export interface LocateNDFix {
+  /** source position in the sites' own coordinates (x, y, then each hidden axis, signed) */
+  pos: number[];
+  t0: number;
+  residual: number;
+  converged: boolean;
+}
+
+function solveN(A: number[][], b: number[]): number[] | null {
+  const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-300) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  const x = new Array<number>(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) {
+    let s = M[r][n];
+    for (let k = r + 1; k < n; k++) s -= M[r][k] * x[k];
+    x[r] = s / M[r][r];
+  }
+  return x.every(Number.isFinite) ? x : null;
+}
+
+/**
+ * Full-vector triangulation. Sites are points of the whole space (plane coordinates then the hidden axes), the
+ * source is an unknown point there, and nothing is squared away: the SIGN of every hidden coordinate is recovered,
+ * provided the sites are spread over the hidden axes. One planar array cannot do this (mirror symmetry: see
+ * `locateSource`). Two arrays at different hidden offsets break it along that axis, and an array lifted along each
+ * hidden axis breaks it along all of them: the hidden vector is then known exactly, in any number of dimensions.
+ * Needs at least D + 1 sites for D coordinates plus the emission time.
+ */
+export function locateND(sites: readonly (readonly number[])[], arrivals: readonly number[], speed: number): LocateNDFix | null {
+  const m = sites.length, D = sites[0]?.length ?? 0;
+  if (D < 2 || m < D + 2 || arrivals.length !== m || !(speed > 0) || arrivals.some((a) => !Number.isFinite(a)) || sites.some((q) => q.length !== D)) return null;
+  const n = D + 1;
+  const res = (p: number[], out: number[]): number => {
+    let s = 0;
+    for (let i = 0; i < m; i++) {
+      let d2 = 1e-12;
+      for (let k = 0; k < D; k++) d2 += (p[k] - sites[i][k]) ** 2;
+      out[i] = p[D] + Math.sqrt(d2) / speed - arrivals[i];
+      s += out[i] * out[i];
+    }
+    return s;
+  };
+  const cen = Array.from({ length: D }, (_, k) => sites.reduce((s, q) => s + q[k], 0) / m);
+  const tmin = Math.min(...arrivals);
+  const starts: number[][] = [[...cen, tmin - 10 / speed]];
+  const offs = [-30, -10, -3, 3, 10, 30];
+  const hid = D - 2;
+  for (let c = 0; c < Math.pow(offs.length, hid); c++) {
+    const p = [...cen]; let r = c;
+    for (let k = 0; k < hid; k++) { p[2 + k] += offs[r % offs.length]; r = Math.floor(r / offs.length); }
+    starts.push([...p, tmin - 10 / speed]);
+  }
+  let best: { p: number[]; cost: number; ok: boolean } | null = null;
+  const r = new Array<number>(m).fill(0), r2 = new Array<number>(m).fill(0);
+  for (const s0 of starts) {
+    let p = [...s0], cost = res(p, r), lam = 1e-3, ok = false;
+    for (let it = 0; it < 150; it++) {
+      const A = Array.from({ length: n }, () => new Array<number>(n).fill(0)), g = new Array<number>(n).fill(0);
+      for (let i = 0; i < m; i++) {
+        let d2 = 1e-12;
+        for (let k = 0; k < D; k++) d2 += (p[k] - sites[i][k]) ** 2;
+        const R = Math.sqrt(d2), J = new Array<number>(n).fill(1);
+        for (let k = 0; k < D; k++) J[k] = (p[k] - sites[i][k]) / (speed * R);
+        for (let a = 0; a < n; a++) { g[a] += J[a] * r[i]; for (let b = 0; b < n; b++) A[a][b] += J[a] * J[b]; }
+      }
+      for (let a = 0; a < n; a++) A[a][a] += lam * (A[a][a] + 1e-12);
+      const d = solveN(A, g.map((v) => -v));
+      if (!d) { lam *= 10; if (lam > 1e12) break; continue; }
+      const cand = p.map((v, k) => v + d[k]);
+      const c2 = res(cand, r2);
+      if (c2 < cost) { const step = Math.hypot(...d); p = cand; cost = c2; res(p, r); lam = Math.max(1e-12, lam / 3); if (step < 1e-11) { ok = true; break; } }
+      else { lam *= 4; if (lam > 1e12) { ok = true; break; } }
+    }
+    if (!best || cost < best.cost - 1e-18) best = { p, cost, ok };
+  }
+  if (!best) return null;
+  return { pos: best.p.slice(0, D), t0: best.p[D], residual: Math.sqrt(best.cost / m), converged: best.ok };
+}

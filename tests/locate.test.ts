@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { locateSource } from "../src/core/strata/index.js";
+import { locateND, locateSource } from "../src/core/strata/index.js";
 import { TRI_FLAT, newLab, triSites, triangulate } from "../src/lab/lab.js";
 import { defaultWorld } from "../src/lab/world.js";
 import type { WorldSpec } from "../src/lab/world.js";
@@ -83,7 +83,7 @@ test("array: a drifting sender clock is recovered from two solved firing times",
 });
 
 test("array: a warped medium is flagged, and 'flat' is never wrong (150 random worlds)", () => {
-  let flat = 0, warped = 0;
+  let flat = 0, warped = 0, lifted = 0;
   for (let n = 0; n < 150; n++) {
     const doms: WorldSpec["domains"] = [];
     for (let i = 0, k = Math.floor(rnd() * 3); i < k; i++) {
@@ -104,9 +104,10 @@ test("array: a warped medium is flagged, and 'flat' is never wrong (150 random w
       flat++;
       assert.ok(r.errPos < 1e-3 && r.errDepth < 1e-3 && r.errT0 < 1e-3, `flat but wrong n=${n}: pos ${r.errPos} depth ${r.errDepth}`);
       assert.ok(r.fix.residual <= TRI_FLAT);
+      if (r.lift) { lifted++; assert.ok(r.lift.errZ < 1e-3, `lift wrong n=${n}: ${r.lift.errZ}`); }
     } else warped++;
   }
-  assert.ok(flat > 40 && warped > 10, `non-vacuous: ${flat} flat / ${warped} warped`);
+  assert.ok(flat > 40 && warped > 10 && lifted > 10, `non-vacuous: ${flat} flat / ${warped} warped / ${lifted} lifted`);
 });
 
 test("array: the default world's warped sources are caught", () => {
@@ -140,4 +141,38 @@ test("trial: Clear Sightline starts warped, cannot be passed by editing the sky,
   assert.equal(t.check(s).ok, true, t.check(s).status);
   assert.equal(triangulate(s, "E")?.verdict, "flat");
   assert.ok(Math.abs((triangulate(s, "E")?.fix.depth ?? 0) - 9) < 1e-3, "the hidden height is read as 9");
+});
+
+test("lift: a second array raised along the hidden axis recovers the SIGNED height, above or below", () => {
+  for (const z of [-20, -12, 0, 7, 25]) {
+    const l = newLab({ v: 1, rootSpeed: 6, bulk: true, domains: [], emitters: [{ id: "E", domain: "root", pos: [30, 40], period: 4, phase: 0, hue: 10, z } as never] });
+    l.t = 60; l.probe = [60, 55]; l.probeZ = 3; l.sel = { kind: "emitter", id: "E" };
+    const r = triangulate(l);
+    assert.ok(r && r.verdict === "flat" && r.lift, `z=${z}`);
+    assert.ok(r && r.lift && r.lift.errZ < 1e-9 && (z === 0 || Math.sign(r.lift.z) === Math.sign(z)), `z=${z} read ${r?.lift?.z}`);
+    assert.ok(r && Math.abs(r.fix.depth - Math.abs(z - 3)) < 1e-3, "the single array still reads |z - probeZ|");
+  }
+});
+
+test("hidden axes: with two (4D) a single plane reads only the NORM of the hidden vector; three lifted arrays read all of it", () => {
+  const base: [number, number][] = [[50, 50], [66, 50], [34, 50], [50, 66], [50, 34], [58, 58], [42, 42]];
+  const hit = (sites: number[][], src: number[], t0: number, v: number) => sites.map((s) => t0 + Math.hypot(...s.map((c, k) => c - src[k])) / v);
+  // mirror/rotation symmetry: two different hidden vectors of equal norm give IDENTICAL arrivals at a planar array
+  const flatSites = base.map((q) => [q[0], q[1], 0, 0]);
+  const a = hit(flatSites, [30, 70, 12, -9], 1, 6), b = hit(flatSites, [30, 70, 15, 0], 1, 6), c = hit(flatSites, [30, 70, -9, 12], 1, 6);
+  a.forEach((x, i) => { assert.ok(Math.abs(x - b[i]) < 1e-12 && Math.abs(x - c[i]) < 1e-12); });
+  const f = locateND(flatSites, a, 6);
+  assert.ok(f && f.residual < 1e-6, "the plane fits perfectly...");
+  assert.ok(f && Math.abs(Math.hypot(f.pos[2], f.pos[3]) - 15) < 1e-3, "...with the right norm");
+  // three arrays lifted along each hidden axis resolve the whole vector, in 40 random 4D worlds
+  for (let n = 0; n < 40; n++) {
+    const src = [U(5, 95), U(5, 95), U(-25, 25), U(-25, 25)], t0 = U(0, 10), v = U(3, 9);
+    const sites: number[][] = [];
+    for (const [gz, gw] of [[0, 0], [8, 0], [0, 8]]) for (const q of base) sites.push([q[0], q[1], gz, gw]);
+    const g = locateND(sites, hit(sites, src, t0, v), v);
+    assert.ok(g, `n=${n}`);
+    if (g) assert.ok(Math.hypot(...g.pos.map((x, k) => x - src[k])) < 1e-4 && Math.abs(g.t0 - t0) < 1e-4, `n=${n}`);
+  }
+  assert.equal(locateND(flatSites.slice(0, 5), a.slice(0, 5), 6), null, "5 sites cannot fix 4 coordinates + time");
+  assert.equal(locateND(flatSites, a, -1), null);
 });

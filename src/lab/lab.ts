@@ -1,4 +1,4 @@
-import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, locateSource, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
+import { FB_BASE, analyzeFeedback, arrivalField, countInversions, calibrateBeacon, fermatField, lagSpread, locateND, locateSource, march, runFeedback, sampleField, zeroCountUpTo, zetaZero } from "../core/strata/index.js";
 import type { Arrival, ArrivalField, BeaconFix, LocateFix, FbAudit, FbEdge, FbNode, FbPulse, FbResult, FbSeed, StrataTree, Vec } from "../core/strata/index.js";
 import { DIM_MAX, DIM_MIN, LAWFUL, LOSS_STEPS, NOISE_STEPS, auditRay, consistentLaws, fitDelay, fitNoise, fitSpreading } from "../core/laws/index.js";
 import type { DelayFit, LawGuess, Laws, RayAudit, SpreadFit } from "../core/laws/index.js";
@@ -777,6 +777,8 @@ export function lawFit(lab: Lab, emitterId?: string): LawFitResult | null {
 export const TRI_R = 16;
 /** Residual below this (seconds, RMS) means the arrivals are consistent with a flat uniform medium. */
 export const TRI_FLAT = 1e-4;
+/** How far the second array is lifted along the hidden axis. */
+export const TRI_LIFT = 8;
 
 export interface TriResult {
   emitter: string;
@@ -796,6 +798,8 @@ export interface TriResult {
   rateTrue: number;
   /** flat: the uniform-medium model explains the arrivals; warped: it does not, so the numbers above are unreliable */
   verdict: "flat" | "warped";
+  /** bulk worlds: a second array lifted TRI_LIFT along the hidden axis removes the mirror ambiguity (signed height) */
+  lift: { z: number; errZ: number; residual: number } | null;
 }
 
 /** The probe plus four neighbours at distance TRI_R, kept inside the world. */
@@ -830,12 +834,21 @@ export function triangulate(lab: Lab, emitterId?: string): TriResult | null {
     const p = lab.tree.toRootPos(e.domain, emitterPos(lab, e));
     const truth = { x: p[0], y: p[1], depth: Math.abs((p[2] ?? 0) - z), t0: a.launchRoot };
     const dom = lab.tree.get(e.domain);
+    let lift: TriResult["lift"] = null;
+    if (lab.spec.bulk) {
+      const sites3: number[][] = [...sites.map((q) => [q[0], q[1], z]), ...sites.map((q) => [q[0], q[1], z + TRI_LIFT])];
+      const up = sites.map((q) => march(lab.tree, from, a.launchLocal, { domain: "root", pos: [q[0], q[1], z + TRI_LIFT] }, MARCH).rootTime);
+      const arr = [...ta, ...up];
+      const f3 = up.every((x) => x <= lab.t) ? locateND(sites3, arr, lab.spec.rootSpeed) : null;
+      if (f3) lift = { z: f3.pos[2], errZ: Math.abs(f3.pos[2] - (p[2] ?? 0)), residual: f3.residual };
+    }
     const dRoot = fa.t0 - fb.t0, dLocal = a.launchLocal - b.launchLocal;
     value = {
       emitter: e.id, sites, k: a.k, fix: fa, truth,
       errPos: Math.hypot(fa.x - truth.x, fa.y - truth.y), errDepth: Math.abs(fa.depth - truth.depth), errT0: Math.abs(fa.t0 - truth.t0),
       rateEst: dRoot > 1e-9 ? dLocal / dRoot : NaN, rateTrue: lab.tree.rateToRoot(dom, (a.launchRoot + b.launchRoot) / 2),
-      verdict: fa.converged && fb.converged && Math.max(fa.residual, fb.residual) <= TRI_FLAT ? "flat" : "warped",
+      verdict: fa.converged && fb.converged && Math.max(fa.residual, fb.residual, lift?.residual ?? 0) <= TRI_FLAT ? "flat" : "warped",
+      lift,
     };
   }
   lab.tri = { key, value };

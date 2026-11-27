@@ -1022,7 +1022,7 @@ export function createObservatory(hooks) {
             let msg = `${l.sel.id} · array of 5 · listening… needs two pulses heard by all five sites`, col = "rgba(180,200,220,0.7)";
             if (tr) {
                 const f = tr.fix, rate = Number.isFinite(tr.rateEst) ? `×${tr.rateEst.toFixed(2)} (true ×${tr.rateTrue.toFixed(2)})` : "?";
-                const depth = f.depth > 0.5 ? `depth ${f.depth.toFixed(1)} (above or below: unknowable)` : "in the plane";
+                const depth = tr.lift ? `height ${tr.lift.z >= 0 ? "+" : ""}${tr.lift.z.toFixed(1)} (sign known: lifted array)` : f.depth > 0.5 ? `depth ${f.depth.toFixed(1)} (above or below: unknowable)` : "in the plane";
                 if (tr.verdict === "flat") {
                     msg = `${tr.emitter} at (${f.x.toFixed(1)}, ${f.y.toFixed(1)}) ${depth} · fired t ${f.t0.toFixed(2)} · clock ${rate} · ✓ flat medium: trust it`;
                     col = "rgba(127,219,202,0.95)";
