@@ -157,7 +157,7 @@ function launch() {
     tutor = run.kind === "tutorial" ? newTutor(game) : null;
     ui.hint = null;
     const b = run.kind === "campaign" ? BRIEFS[level.id]
-        : run.kind === "drift" ? driftBrief(run.seed, run.depth, level.beacons.length, !!level.bulk) : undefined;
+        : run.kind === "drift" ? driftBrief(run.seed, run.depth, level.beacons.length, !!level.bulk, !!level.bulk2) : undefined;
     const t0 = performance.now();
     ui.brief = b ? { title: b.title, lines: b.lines, since: t0, until: t0 + 7000 } : null;
     resetRender();

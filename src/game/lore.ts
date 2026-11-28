@@ -24,10 +24,11 @@ export function sectorName(seed: number, depth: number): { code: string; name: s
   return { code, name: NAMES[(h >>> 17) % NAMES.length] };
 }
 
-export function driftBrief(seed: number, depth: number, beacons: number, hidden: boolean): Brief {
+export function driftBrief(seed: number, depth: number, beacons: number, hidden: boolean, second = false): Brief {
   const s = sectorName(seed, depth);
   const lines = [`Depth ${depth}. ${beacons} beacons on the lattice.`];
-  lines.push(hidden ? "A hidden axis is present. Not every echo lies in your plane."
+  lines.push(second ? "Two hidden axes are present. An echo can hide in z, in w, or in both."
+    : hidden ? "A hidden axis is present. Not every echo lies in your plane."
     : depth >= 4 ? "Nested clocks detected. Expect drift." : depth >= 2 ? "A fast domain has been reported." : "The lattice is calm. For now.");
   return { title: `${s.code} · ${s.name.toUpperCase()}`, lines };
 }

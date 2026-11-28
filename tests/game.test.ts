@@ -221,3 +221,31 @@ test("4D level: beacons hidden along z and along w are heard at their 4D distanc
   const lagOf = (gg: ReturnType<typeof newGame>) => { for (let i = 0; i < 60 * 12; i++) { step(gg, idle); const ev = gg.events.find((e) => e.kind === "heard"); if (ev && ev.kind === "heard") return ev.pulse.arrival - ev.pulse.emitRoot; } return NaN; };
   near(lagOf(a), lagOf(b), 1e-9);
 });
+
+test("4D drift depths (>= 9): deterministic, two hidden axes, valid and winnable by contour; shallower depths unchanged", () => {
+  const a = generateLevel(99, 9), b = generateLevel(99, 9), c = generateLevel(99, 10);
+  assert.ok(a.bulk && a.bulk2 && c.bulk2);
+  assert.deepEqual(a.beacons, b.beacons);
+  assert.equal(a.build().dim, 4);
+  assert.ok(a.beacons.some((x) => x.w && Math.abs(x.w) >= 8 && Math.abs(x.w) <= 28), "some beacon hides along w");
+  assert.ok(a.beacons.some((x) => x.z && x.w), "and one hides along both");
+  assert.ok(!generateLevel(99, 8).bulk2 && generateLevel(99, 8).bulk);
+  assert.ok(generateLevel(99, 6).beacons.every((x) => x.w === undefined));
+  const L = generateLevel(20261128, 9);
+  const dirs: [number, number][] = [[0, 0]];
+  for (let i = 0; i < 8; i++) dirs.push([Math.cos((i * Math.PI) / 4), Math.sin((i * Math.PI) / 4)]);
+  const g = newGame(L);
+  g.pos = [50, 50];
+  const pStar = L.decay / L.gain;
+  while (g.phase === "playing" && g.time < 300) {
+    const want = Math.min(1, Math.max(0, pStar + 0.006 * (45 - g.dissonance)));
+    let best = dirs[0], bs = Infinity;
+    for (const d of dirs) {
+      const q = [Math.min(100, Math.max(0, g.pos[0] + d[0] * 14 * TICK)), Math.min(100, Math.max(0, g.pos[1] + d[1] * 14 * TICK))];
+      const sc = Math.abs(Math.min(1, probeSpread(g, q) / L.spreadCap) - want);
+      if (sc < bs) { bs = sc; best = d; }
+    }
+    step(g, { dx: best[0], dy: best[1], anchor: g.dissonance > 92 && g.charges > 0 });
+  }
+  assert.equal(g.phase, "won", `depth 9 unwinnable by bot (t=${g.time.toFixed(0)}, lock=${g.lock.toFixed(0)})`);
+});

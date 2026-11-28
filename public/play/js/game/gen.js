@@ -64,14 +64,16 @@ function candidate(seed, depth, attempt) {
         };
         doms.push(micro);
     }
-    // from depth 5 the world gains a hidden axis; some root beacons hover off the plane
-    const bulk = depth >= 5;
+    // from depth 5 the world gains a hidden axis; some root beacons hover off the plane.
+    // from depth 9 it gains a second one (4D): beacons may hide along w as well
+    const bulk = depth >= 5, bulk2 = depth >= 9;
+    const dim = bulk2 ? 4 : bulk ? 3 : 2;
     const build = () => {
-        const t = new StrataTree(bulk ? 3 : 2, ROOT_SPEED);
+        const t = new StrataTree(dim, ROOT_SPEED);
         for (const d of doms) {
             const radLocal = d.extent * d.scale;
             t.add({
-                id: d.id, parent: d.parent, origin: bulk ? [d.origin[0], d.origin[1], 0] : d.origin, scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed,
+                id: d.id, parent: d.parent, origin: [d.origin[0], d.origin[1], ...Array.from({ length: dim - 2 }, () => 0)], scale: d.scale, extent: d.extent, echoSpeed: d.echoSpeed,
                 rate: d.rate,
                 shear: d.shearMin === undefined ? undefined
                     : (p) => d.shearMin + (1 - d.shearMin) * Math.min(1, Math.hypot(...p) / radLocal),
@@ -107,14 +109,16 @@ function candidate(seed, depth, attempt) {
             rootPts.push(p);
             const phase = U(0, rootPeriod);
             const z = bulk && i % 3 === 2 ? Math.round(U(8, 28)) : undefined;
-            beacons.push({ name: String.fromCharCode(65 + i), domain: "root", pos: p, period: rootPeriod, phase, hue, ...(z === undefined ? {} : { z }) });
+            // second axis: beacons 2 (with its z) and 4 also hide along w, on either side of the slice
+            const w = bulk2 && i % 3 !== 0 ? Math.round(U(8, 28)) * (r() < 0.5 ? -1 : 1) : undefined;
+            beacons.push({ name: String.fromCharCode(65 + i), domain: "root", pos: p, period: rootPeriod, phase, hue, ...(z === undefined ? {} : { z }), ...(w === undefined ? {} : { w }) });
         }
     }
     const gain = 20 + Math.min(8, depth);
     const decay = 6;
     return {
         id: 100 + depth, tag: `D${depth}`, name: `Drift ${depth}`, blurb: `seed ${seed}`,
-        build, beacons, start: [50, 50], ...(bulk ? { bulk: true } : {}),
+        build, beacons, start: [50, 50], ...(bulk ? { bulk: true } : {}), ...(bulk2 ? { bulk2: true } : {}),
         gain, decay, spreadCap: 10, lockRate: 2.6 + Math.min(0.6, depth * 0.05),
         bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
     };

@@ -17,10 +17,11 @@ export function sectorName(seed, depth) {
     const code = `${LETTERS[h % LETTERS.length]}${LETTERS[(h >>> 5) % LETTERS.length]}-${10 + ((h >>> 10) % 90)}`;
     return { code, name: NAMES[(h >>> 17) % NAMES.length] };
 }
-export function driftBrief(seed, depth, beacons, hidden) {
+export function driftBrief(seed, depth, beacons, hidden, second = false) {
     const s = sectorName(seed, depth);
     const lines = [`Depth ${depth}. ${beacons} beacons on the lattice.`];
-    lines.push(hidden ? "A hidden axis is present. Not every echo lies in your plane."
-        : depth >= 4 ? "Nested clocks detected. Expect drift." : depth >= 2 ? "A fast domain has been reported." : "The lattice is calm. For now.");
+    lines.push(second ? "Two hidden axes are present. An echo can hide in z, in w, or in both."
+        : hidden ? "A hidden axis is present. Not every echo lies in your plane."
+            : depth >= 4 ? "Nested clocks detected. Expect drift." : depth >= 2 ? "A fast domain has been reported." : "The lattice is calm. For now.");
     return { title: `${s.code} · ${s.name.toUpperCase()}`, lines };
 }

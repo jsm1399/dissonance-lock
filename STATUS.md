@@ -1,6 +1,7 @@
-# STATUS — Dissonance-Lock v1.18
+# STATUS — Dissonance-Lock v1.19
 
 ## Live capabilities
+- **NEW v1.19 4D Drift:** from depth 9 the seeded generator builds a 4D world (`bulk2`): the strata tree has four dimensions and root beacons 2 (z and w) and 4 (w only) hide along the second axis (|w| 8..28, either side of the slice); depths 5-8 stay 3D and depths below 5 are unchanged (same seeds give the same levels). A 40-world sweep over depths 9, 10, 12, 15 found every level calibrated (coherent zone and overload zone both exist) and a contour bot wins depth 9. Drift briefings announce two hidden axes. Cache name v1.19.
 - **NEW v1.18 Second Axis (campaign L7) + Trial 8 "Hidden Heading":** the first 4D level in the game. `LevelDef.bulk2` (implies `bulk`) builds a 4-dimensional strata tree; beacons carry `z` and/or `w` (`beaconPos`/`planeSite` lift to 4D, `isHidden` marks any off-plane beacon: dashed halo, tag `↑z`, `↑w` or `↑zw`, no wavefront ring because you only hear them). The calibrated spread cap (11.3) is tested for a coherent zone and an overload zone and a contour bot wins it. Tests prove D (w 24) and F (z 14, w 14) are heard at exactly their 4D distance, and that z and w of equal norm give identical lags (the plane cannot tell the axes apart). Trial 8: E hides at z 12, w -8 in an empty 4D sky; TRI's lifted arrays read the signed heading; fly the probe there (Z / I, steps of 4) until TRI reads E in your slice (FLAT, <= 1.5 hidden units). Moving E or leaving 4D is refused. Title menu now drops the rules text on screens shorter than 720 px so 12 rows fit on a phone. Cache name v1.18.
 - Game: tutorial, 6 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
 - Strata core (N-dimensional): nested domains, per-domain clocks with drift, shear wells, causal march, Fermat bent paths, ledger.
@@ -45,7 +46,7 @@
 - Spacetime segments are straight (launch → arrival); bent paths show correct arrival but not the in-flight route.
 
 ## Next objectives
-1. 4D follow-ups (L7 and Trial 8 are done in v1.18): 4D Drift depths; probe arrays that move through the hidden axes on their own; trials/forge goals for the array; movable array geometry; array readings through bent (Fermat) paths and relays; forge goals for the array (TRI reads flat).
+1. 4D follow-ups (L7, Trial 8 and 4D Drift are done): probe arrays that move through the hidden axes on their own; trials/forge goals for the array; movable array geometry; array readings through bent (Fermat) paths and relays; forge goals for the array (TRI reads flat).
 2. Reality-edit scripting: named interventions in the link; trial editor v2 (author-set names, spacetime/zeta goals, probe position in the link).
 3. Trial gallery: a built-in shelf of community-style trials the Forge produced.
 4. Causal-chain levels in the campaign; movable slice plane; PATH·BENT-aware instruments.
