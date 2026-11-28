@@ -4,7 +4,8 @@ import { LAWFUL } from "../core/laws/index.js";
 import { LAW_KEYS, SIZE, SPEEDS, TMAX, addDomain, addEmitter, addFeedback, addRelay, adjust, adjustFeedback, clearCuts, clearDrifts, emitterPos, lawFit, triangulate, triSites, feedbackAudit, feedbackOf, hasFeedback, hasZeta, isEcho, removeFeedback, setDepth, toggleZeta, zetaFix, cycleBulk, probeSite, toggleCut, auditEmitter, computeHeat, cycleLaw, driftRate, emissionsUpTo, fieldOf, hitTest, isBent, metrics, moveSel, newLab, perceived, pumpFields, removeSel, resetLaws, } from "./lab.js";
 import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
-import { defaultWorld, lawsOf } from "./world.js";
+import { planesOf, rangeOf, setProbeOn, sliceOf } from "./slice.js";
+import { defaultWorld, hiddenAxes, lawsOf } from "./world.js";
 import { TRIALS } from "./trials.js";
 import { GOAL_KINDS, asTrial, forge, goalProblems, goalTitle, judge, keepOf, placeProbe, probeOf } from "./forge.js";
 import { nextLaw } from "./lab.js";
@@ -29,6 +30,11 @@ export function createObservatory(hooks) {
     let toast = null;
     let lastRev = -1;
     let view = "map";
+    /** slice view: which pair of axes is shown, and whether the probe is being dragged in it */
+    let planeIdx = 0;
+    let sliceDrag = false;
+    const planes = (l) => planesOf(2 + hiddenAxes(l.spec));
+    const planeOf = (l) => { const ps = planes(l); return ps[planeIdx % ps.length]; };
     /** LOOP tool: emitter whose pulses the next click will tap */
     let loopFrom = null;
     /** narrow screens show one toolbar group at a time */
@@ -58,7 +64,8 @@ export function createObservatory(hooks) {
             R("heat", l.heat ? "HEAT ✓" : "HEAT"),
             R("zeta", "ZETA"), B("cut", "CUT"), B("uncut", l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT"),
             R("link", "LINK"), R("reset", "RESET"), R("menu", "MENU"),
-            R("view", view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP"),
+            R("view", view === "st" ? "VIEW·SPACETIME" : view === "sl" ? "VIEW·SLICE" : "VIEW·MAP"),
+            ...(view === "sl" ? [R("plane", `PLANE·${planeOf(l).join("").toUpperCase()}`)] : []),
             B("bulk", l.spec.bulk ? (l.spec.bulk2 ? "BULK·4D" : "BULK·3D") : "BULK·OFF"),
             ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}`, g: "forge" }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL", g: "forge" }]),
             ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0, g: "laws" })),
@@ -124,6 +131,8 @@ export function createObservatory(hooks) {
             placeProbe(lab, t.probe);
         lastRev = -1;
         view = "map";
+        planeIdx = 0;
+        sliceDrag = false;
         drag = null;
         scrubbing = false;
         loopFrom = null;
@@ -215,9 +224,15 @@ export function createObservatory(hooks) {
             say("history restored");
         }
         else if (id === "view") {
-            view = view === "map" ? "st" : "map";
+            const hasSlice = hiddenAxes(l.spec) > 0;
+            view = view === "map" ? "st" : view === "st" && hasSlice ? "sl" : "map";
             wf.clear();
-            say(view === "st" ? "spacetime: probe frame" : "map view");
+            sliceDrag = false;
+            say(view === "st" ? "spacetime: probe frame" : view === "sl" ? "slice: two axes shown, the rest held at the probe" : "map view");
+        }
+        else if (id === "plane") {
+            planeIdx = (planeIdx + 1) % planes(l).length;
+            say(`plane ${planeOf(l).join("").toUpperCase()}`);
         }
         else if (id === "menu")
             hooks.onExit();
@@ -399,6 +414,11 @@ export function createObservatory(hooks) {
             else
                 say(l.tool === "micro" ? "place MICRO inside a domain" : "domain limit reached");
         }
+    }
+    /** slice view: a point of the square maps to the two shown axes; the held axes do not move */
+    function sliceMove(l, p) {
+        const pl = planeOf(l), [aLo, aHi] = rangeOf(pl[0]), [bLo, bHi] = rangeOf(pl[1]);
+        setProbeOn(l, pl, aLo + (p[0] / SIZE) * (aHi - aLo), bLo + (p[1] / SIZE) * (bHi - bLo));
     }
     function setT(px) {
         const l = lab;
@@ -956,6 +976,102 @@ export function createObservatory(hooks) {
         text(c, `FORGE · ${goalTitle(g.kind).toUpperCase()}${g.target ? ` · ${g.target}` : ""} · ${step}`, x + 10, y + 14, 10, "#c9a8ff", "left", "700");
         text(c, `${res.ok ? "✓ passes" : "✗ fails"} · ${res.status}`, x + 10, y + 32, 10, res.ok ? "#7fdbca" : "#ff7a90", "left", "700");
     }
+    /** Slice view: the same world seen through two chosen axes, everything else held at the probe. */
+    function drawSlice(c, l) {
+        if (view === "sl" && hiddenAxes(l.spec) === 0)
+            view = "map";
+        const pl = planeOf(l), sl = sliceOf(l, pl);
+        const { x0, y0, s } = geo;
+        const [aLo, aHi] = rangeOf(pl[0]), [bLo, bHi] = rangeOf(pl[1]);
+        const X = (a) => x0 + ((a - aLo) / (aHi - aLo)) * SIZE * s, Y = (b) => y0 + ((b - bLo) / (bHi - bLo)) * SIZE * s;
+        const ka = (SIZE * s) / (aHi - aLo), kb = (SIZE * s) / (bHi - bLo);
+        c.save();
+        c.beginPath();
+        c.rect(x0, y0, SIZE * s, SIZE * s);
+        c.clip();
+        c.fillStyle = "#070a12";
+        c.fillRect(x0, y0, SIZE * s, SIZE * s);
+        c.strokeStyle = "rgba(255,255,255,0.045)";
+        for (let k = 0; k <= 10; k++) {
+            const gx = x0 + (k / 10) * SIZE * s, gy = y0 + (k / 10) * SIZE * s;
+            c.beginPath();
+            c.moveTo(gx, y0);
+            c.lineTo(gx, y0 + SIZE * s);
+            c.stroke();
+            c.beginPath();
+            c.moveTo(x0, gy);
+            c.lineTo(x0 + SIZE * s, gy);
+            c.stroke();
+        }
+        // axis zero lines for hidden axes: the slice the plane-bound observer lives in
+        c.strokeStyle = "rgba(255,180,84,0.35)";
+        c.setLineDash([3, 4]);
+        if (pl[0] === "z" || pl[0] === "w") {
+            c.beginPath();
+            c.moveTo(X(0), y0);
+            c.lineTo(X(0), y0 + SIZE * s);
+            c.stroke();
+        }
+        if (pl[1] === "z" || pl[1] === "w") {
+            c.beginPath();
+            c.moveTo(x0, Y(0));
+            c.lineTo(x0 + SIZE * s, Y(0));
+            c.stroke();
+        }
+        c.setLineDash([]);
+        for (const d of sl.domains) {
+            const cx = X(d.a), cy = Y(d.b);
+            c.beginPath();
+            c.ellipse(cx, cy, d.r * ka, d.r * kb, 0, 0, Math.PI * 2);
+            c.fillStyle = d.shear ? "rgba(160,90,255,0.16)" : "rgba(80,220,255,0.12)";
+            c.fill();
+            c.strokeStyle = d.shear ? "rgba(160,90,255,0.6)" : "rgba(80,220,255,0.6)";
+            c.setLineDash([4, 4]);
+            c.stroke();
+            c.setLineDash([]);
+            text(c, d.id, cx, cy - d.r * kb - 7, 10, d.shear ? "rgba(190,150,255,0.9)" : "rgba(130,230,255,0.9)", "center");
+        }
+        for (const e of sl.emitters) {
+            const cx = X(e.a), cy = Y(e.b), alpha = e.onSlice ? 1 : Math.max(0.3, 1 - e.off / 40);
+            c.beginPath();
+            c.arc(cx, cy, 2.2 * s, 0, Math.PI * 2);
+            c.fillStyle = hsl(e.hue, 80, 60, 0.16 * alpha);
+            c.fill();
+            c.beginPath();
+            c.arc(cx, cy, 1.4 * s, 0, Math.PI * 2);
+            if (e.onSlice) {
+                c.fillStyle = hsl(e.hue, 85, 62);
+                c.fill();
+            }
+            else {
+                c.strokeStyle = hsl(e.hue, 85, 62, alpha);
+                c.lineWidth = 1.5;
+                c.stroke();
+                c.lineWidth = 1;
+            }
+            text(c, e.onSlice ? e.id : `${e.id} off ${e.off.toFixed(0)}`, cx, cy - 3.2 * s, 10, hsl(e.hue, 80, 78, alpha), "center", "700");
+        }
+        const px = X(sl.probe.a), py = Y(sl.probe.b), pr = 1.8 * s;
+        c.strokeStyle = "#fff";
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.arc(px, py, pr, 0, Math.PI * 2);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(px - pr * 1.6, py);
+        c.lineTo(px + pr * 1.6, py);
+        c.moveTo(px, py - pr * 1.6);
+        c.lineTo(px, py + pr * 1.6);
+        c.stroke();
+        c.lineWidth = 1;
+        c.restore();
+        c.strokeStyle = "rgba(255,255,255,0.25)";
+        c.strokeRect(x0 + 0.5, y0 + 0.5, SIZE * s - 1, SIZE * s - 1);
+        const held = Object.entries(sl.held).map(([k, v]) => `${k}=${v.toFixed(0)}`).join(" ");
+        text(c, `SLICE ${pl.join("").toUpperCase()} · held at probe: ${held} · drag to move the probe · S plane`, x0 + 6, y0 + SIZE * s - 10, 10, "rgba(255,180,84,0.9)", "left", "400", SIZE * s - 12);
+        text(c, pl[0].toUpperCase(), x0 + SIZE * s - 8, y0 + 10, 11, "rgba(180,200,220,0.7)", "right", "700");
+        text(c, pl[1].toUpperCase(), x0 + 8, y0 + 10, 11, "rgba(180,200,220,0.7)", "left", "700");
+    }
     function drawToolbar(c, l) {
         for (const b of btns) {
             const isLaw = b.id.startsWith("law:");
@@ -1191,8 +1307,12 @@ export function createObservatory(hooks) {
             ctx.fillRect(0, 0, w, h);
             if (view === "st")
                 drawSpacetime(ctx, lab);
-            drawWorld(ctx, lab, now);
-            drawArray(ctx, lab);
+            if (view === "sl")
+                drawSlice(ctx, lab);
+            else {
+                drawWorld(ctx, lab, now);
+                drawArray(ctx, lab);
+            }
             if (trial)
                 drawTrial(ctx, now);
             else
@@ -1229,6 +1349,12 @@ export function createObservatory(hooks) {
                 case "b":
                     activate("bulk");
                     return true;
+                case "s":
+                    if (view === "sl") {
+                        activate("plane");
+                        return true;
+                    }
+                    return false;
                 case "z":
                 case "i": {
                     const ax = k === "i" ? "w" : "z";
@@ -1350,6 +1476,13 @@ export function createObservatory(hooks) {
                 return;
             }
             const p = toWorld(x, y);
+            if (view === "sl") {
+                if (inWorld(p)) {
+                    sliceDrag = true;
+                    sliceMove(l, p);
+                }
+                return;
+            }
             if (inWorld(p))
                 place(p);
         },
@@ -1361,11 +1494,15 @@ export function createObservatory(hooks) {
                 setT(x);
                 return;
             }
+            if (sliceDrag) {
+                sliceMove(l, toWorld(x, y));
+                return;
+            }
             if (drag) {
                 const p = toWorld(x, y);
                 moveSel(l, drag, p);
             }
         },
-        pointerUp() { drag = null; scrubbing = false; },
+        pointerUp() { drag = null; scrubbing = false; sliceDrag = false; },
     };
 }
