@@ -6,7 +6,7 @@ import { apparentDepth } from "./bulk.js";
 import { causalCone, spacetime } from "./spacetime.js";
 import { defaultWorld, lawsOf } from "./world.js";
 import { TRIALS } from "./trials.js";
-import { GOAL_KINDS, asTrial, forge, goalProblems, goalTitle, judge, keepOf } from "./forge.js";
+import { GOAL_KINDS, asTrial, forge, goalProblems, goalTitle, judge, keepOf, placeProbe, probeOf } from "./forge.js";
 import { nextLaw } from "./lab.js";
 const TOOLS = [
     { id: "select", label: "SELECT" }, { id: "fast", label: "FAST" }, { id: "well", label: "WELL" },
@@ -31,13 +31,15 @@ export function createObservatory(hooks) {
     let view = "map";
     /** LOOP tool: emitter whose pulses the next click will tap */
     let loopFrom = null;
+    /** narrow screens show one toolbar group at a time */
+    let tbGroup = "build";
     /** Calibration Trial in progress: the goal must hold for HOLD seconds */
     let trial = null;
     let attempt = 0;
     /** a Forge-authored trial being played (idx -1), else null */
     let custom = null;
     /** Trial Forge authoring: the goal, the sealed broken start, and the last sealed trial */
-    const fg = { goal: null, start: null, t: 0, last: null, judged: null };
+    const fg = { goal: null, start: null, startProbe: null, t: 0, last: null, judged: null };
     const cur = () => custom ?? TRIALS[trial?.idx ?? 0];
     /** the laws the toolbar shows: the player's guess in a hidden-law trial, else the world's */
     const shown = (l) => trial?.guess ?? lawsOf(l.spec);
@@ -47,23 +49,38 @@ export function createObservatory(hooks) {
     function layout(ctx, w, h) {
         const l = lab;
         const laws = shown(l);
+        const B = (id, label) => ({ id, label, g: "build" });
+        const R = (id, label) => ({ id, label, g: "run" });
         const items = [
-            ...TOOLS,
-            { id: "play", label: l.playing ? "PAUSE" : "PLAY" },
-            { id: "speed", label: `×${SPEEDS[l.speedIdx]}` },
-            { id: "heat", label: l.heat ? "HEAT ✓" : "HEAT" },
-            { id: "zeta", label: "ZETA" }, { id: "cut", label: "CUT" }, { id: "uncut", label: l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT" },
-            { id: "link", label: "LINK" }, { id: "reset", label: "RESET" }, { id: "menu", label: "MENU" },
-            { id: "view", label: view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP" },
-            { id: "bulk", label: l.spec.bulk ? (l.spec.bulk2 ? "BULK·4D" : "BULK·3D") : "BULK·OFF" },
-            ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}` }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL" }]),
-            ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0 })),
-            { id: "lawful", label: "LAWFUL" },
+            ...TOOLS.map((t) => B(t.id, t.label)),
+            R("play", l.playing ? "PAUSE" : "PLAY"),
+            R("speed", `×${SPEEDS[l.speedIdx]}`),
+            R("heat", l.heat ? "HEAT ✓" : "HEAT"),
+            R("zeta", "ZETA"), B("cut", "CUT"), B("uncut", l.spec.cuts?.length ? `UNCUT·${l.spec.cuts.length}` : "UNCUT"),
+            R("link", "LINK"), R("reset", "RESET"), R("menu", "MENU"),
+            R("view", view === "st" ? "VIEW·SPACETIME" : "VIEW·MAP"),
+            B("bulk", l.spec.bulk ? (l.spec.bulk2 ? "BULK·4D" : "BULK·3D") : "BULK·OFF"),
+            ...(trial ? [] : [{ id: "goal", label: `GOAL·${(fg.goal?.kind ?? "off").toUpperCase()}`, g: "forge" }, { id: "seal", label: fg.start ? "SEAL·REPAIR" : "SEAL", g: "forge" }]),
+            ...LAW_KEYS.map((k, i) => ({ id: `law:${k}`, label: lawLabel(k, laws), brk: i === 0, g: "laws" })),
+            { id: "lawful", label: "LAWFUL", g: "laws" },
         ];
+        const narrow = w < 640;
+        const groups = ["build", "run", "laws", ...(trial ? [] : ["forge"])];
+        if (narrow && !groups.includes(tbGroup))
+            tbGroup = "build";
+        const shownItems = narrow
+            ? [...groups.map((g) => ({ id: `grp:${g}`, label: g.toUpperCase(), g: "sel" })), ...items.filter((it) => it.g === tbGroup)]
+            : items;
         btns = [];
         let x = 8, y = 8;
         ctx.font = `700 11px ${FONT}`;
-        for (const it of items) {
+        let sawGroupRow = false;
+        for (const it of shownItems) {
+            if (narrow && !sawGroupRow && it.g !== "sel") {
+                sawGroupRow = true;
+                x = 8;
+                y += 34;
+            }
             const bw = Math.max(46, Math.ceil(ctx.measureText(it.label).width) + 18);
             if (it.brk && x > 8) {
                 x = 8;
@@ -103,6 +120,8 @@ export function createObservatory(hooks) {
         const seed = ++attempt;
         lab = newLab(t.world(seed));
         lab.t = t.t;
+        if (t.probe)
+            placeProbe(lab, t.probe);
         lastRev = -1;
         view = "map";
         drag = null;
@@ -113,8 +132,13 @@ export function createObservatory(hooks) {
         trial = { idx: i, held: 0, done: false, res: { ok: false, status: "" }, seed, hidden: t.hidden !== undefined, guess: t.hidden ? { ...LAWFUL } : null };
         fg.goal = null;
         fg.start = null;
+        fg.startProbe = null;
     }
     function activate(id) {
+        if (id.startsWith("grp:")) {
+            tbGroup = id.slice(4);
+            return;
+        }
         const l = lab;
         if (id === "play") {
             if (l.t >= TMAX)
@@ -226,7 +250,7 @@ export function createObservatory(hooks) {
         }
         const selE = l.sel?.kind === "emitter" ? l.spec.emitters.find((e) => e.id === l.sel?.id) : undefined;
         let target;
-        if (next === "conserved")
+        if (next === "conserved" || next === "flat")
             target = (selE ?? l.spec.emitters[0])?.id;
         if (next === "baseline")
             target = (selE?.zeta !== undefined ? selE : l.spec.emitters.find((e) => e.zeta !== undefined))?.id;
@@ -248,18 +272,19 @@ export function createObservatory(hooks) {
             return;
         }
         if (!fg.start) {
-            const w = judge(JSON.parse(JSON.stringify(l.spec)), g, keepOf(l.spec), Math.round(l.t * 10) / 10);
+            const w = judge(JSON.parse(JSON.stringify(l.spec)), g, keepOf(l.spec, g), Math.round(l.t * 10) / 10, probeOf(l));
             if (w.ok) {
                 say("this world already passes: break it first, then SEAL");
                 return;
             }
             fg.start = JSON.parse(JSON.stringify(l.spec));
+            fg.startProbe = probeOf(l);
             fg.t = l.t;
             fg.judged = null;
             say("start sealed · now REPAIR the world, then SEAL again");
             return;
         }
-        const r = forge("", g, fg.t, fg.start, l.spec);
+        const r = forge("", g, fg.t, fg.start, l.spec, fg.startProbe ?? undefined, probeOf(l));
         if (!r.ok) {
             say(r.why);
             return;
@@ -274,12 +299,12 @@ export function createObservatory(hooks) {
     function forgeJudge(l) {
         const g = fg.goal;
         const t = fg.start ? Math.round(fg.t * 10) / 10 : Math.round(l.t * 2) / 2;
-        const key = `${l.rev}|${t}|${g.kind}|${g.target ?? ""}|${fg.start ? 1 : 0}`;
+        const key = `${l.rev}|${t}|${g.kind}|${g.target ?? ""}|${fg.start ? 1 : 0}|${l.probe[0]},${l.probe[1]},${l.probeZ},${l.probeW}`;
         if (fg.judged?.key === key)
             return fg.judged.res;
         const pr = goalProblems(l.spec, g);
         const spec = JSON.parse(JSON.stringify(l.spec));
-        const res = pr.length ? { ok: false, status: pr[0] } : judge(spec, g, keepOf(fg.start ?? l.spec), t);
+        const res = pr.length ? { ok: false, status: pr[0] } : judge(spec, g, keepOf(fg.start ?? l.spec, g), t, probeOf(l));
         fg.judged = { key, res };
         return res;
     }
@@ -935,7 +960,7 @@ export function createObservatory(hooks) {
         for (const b of btns) {
             const isLaw = b.id.startsWith("law:");
             const bent = isLaw && !lawIsDefault(b.id.slice(4), shown(l));
-            const on = (b.id === "bulk" && !!l.spec.bulk) || (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
+            const on = b.id === `grp:${tbGroup}` || (b.id === "bulk" && !!l.spec.bulk) || (b.id === l.tool) || (b.id === "heat" && !!l.heat) || (b.id === "play" && l.playing);
             const col = bent ? "#ffb454" : "#7fdbca";
             c.fillStyle = bent ? "rgba(255,180,84,0.16)" : on ? "rgba(127,219,202,0.22)" : "rgba(255,255,255,0.05)";
             c.fillRect(b.x, b.y, b.w, b.h);
@@ -969,7 +994,7 @@ export function createObservatory(hooks) {
         text(c, `t ${l.t.toFixed(1)}s`, trackX1, trackY + 16, 11, "#e8f1ff", "right", "700");
         const m = metrics(l);
         text(c, "PROBE", 14, botTop + 46, 10, "rgba(180,200,220,0.6)");
-        text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}${l.pending > 0 ? ` · solving bent paths (${l.pending})` : ""}`, 64, botTop + 46, 12, "rgba(220,232,248,0.95)");
+        text(c, `spread ${m.spread.toFixed(1)}s · inversions ${m.inversions} · heard ${m.heard}${l.pending > 0 ? ` · solving bent paths (${l.pending})` : ""}`, 64, botTop + 46, 12, "rgba(220,232,248,0.95)", "left", "400", w - 72);
         const heard = perceived(l).filter((p) => p.arrival >= l.t - 12).slice(-12);
         const byEmit = heard.slice().sort((a, b) => a.emission.launchRoot - b.emission.launchRoot);
         let maxRank = -1;
@@ -997,7 +1022,7 @@ export function createObservatory(hooks) {
                 : a.verdict === "created" ? `energy ✗ CREATED +${pct}%` : `energy ✗ DESTROYED ${pct}%`;
             const col = a.verdict === "conserved" ? "rgba(127,219,202,0.95)" : "#ff4d6d";
             text(c, `AUDIT`, 14, botTop + 66, 10, "rgba(180,200,220,0.6)");
-            text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col);
+            text(c, `${au.emitter}→probe r ${a.r.toFixed(0)} · ${verdict} · flux ${sci(a.intensity)} · fidelity ${(a.fidelity * 100).toFixed(0)}% · absorbed ${sci(a.absorbedTotal)}`, 64, botTop + 66, 11, col, "left", "400", w - 72);
         }
         if (hasFeedback(l)) {
             const fa = feedbackAudit(l), fr = feedbackOf(l).result, w0 = fa.worst;
@@ -1016,7 +1041,7 @@ export function createObservatory(hooks) {
                 col = v === "damped" ? "rgba(127,219,202,0.95)" : v === "marginal" ? "#ffb454" : "#ff4d6d";
             }
             text(c, "LOOPS", 14, botTop + 110, 10, "rgba(180,200,220,0.6)");
-            text(c, msg, 64, botTop + 110, 11, col);
+            text(c, msg, 64, botTop + 110, 11, col, "left", "400", w - 72);
         }
         {
             const lf = lawFit(l);
@@ -1025,9 +1050,9 @@ export function createObservatory(hooks) {
                 const ab = lf.fit.loss === null ? "absorption: no path crossed a domain" : `absorbs ${(Math.abs(lf.fit.loss) < 5e-4 ? 0 : lf.fit.loss).toFixed(3)}/len`;
                 const sp = lf.delay ? lf.delay.speeds.map((q) => `${q.domain} ×${q.factor.toFixed(2)}`).join(" · ") : "no domain crossed";
                 text(c, "ECHO", 14, botTop + 166, 10, "rgba(180,200,220,0.6)");
-                text(c, `${lf.emitter} echo c ${lf.delay ? lf.delay.c.toFixed(2) : "?"} · speed by domain: ${sp} · fidelity loss ${lf.noise === null ? "no well crossed" : `${(Math.abs(lf.noise) < 5e-4 ? 0 : lf.noise).toFixed(3)}/len`}`, 64, botTop + 166, 11, "rgba(180,200,220,0.85)");
+                text(c, `${lf.emitter} echo c ${lf.delay ? lf.delay.c.toFixed(2) : "?"} · speed by domain: ${sp} · fidelity loss ${lf.noise === null ? "no well crossed" : `${(Math.abs(lf.noise) < 5e-4 ? 0 : lf.noise).toFixed(3)}/len`}`, 64, botTop + 166, 11, "rgba(180,200,220,0.85)", "left", "400", w - 72);
                 text(c, "LAWS", 14, botTop + 148, 10, "rgba(180,200,220,0.6)");
-                text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} ${trial?.hidden ? "" : ` · declared D${lf.declared.dim}·${lf.declared.gauss}`}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent || trial?.hidden ? "rgba(180,200,220,0.85)" : "#ff4d6d");
+                text(c, `${lf.emitter} spreads r^-${lf.fit.n.toFixed(2)} · ${ab} · fits ${g} ${trial?.hidden ? "" : ` · declared D${lf.declared.dim}·${lf.declared.gauss}`}${lf.guesses.length > 1 ? " · intensity alone cannot choose" : ""}`, 64, botTop + 148, 11, lf.consistent || trial?.hidden ? "rgba(180,200,220,0.85)" : "#ff4d6d", "left", "400", w - 72);
             }
         }
         if (l.sel?.kind === "emitter") {
@@ -1047,7 +1072,7 @@ export function createObservatory(hooks) {
                 }
             }
             text(c, "TRI", 14, botTop + 184, 10, "rgba(180,200,220,0.6)");
-            text(c, msg, 64, botTop + 184, 11, col);
+            text(c, msg, 64, botTop + 184, 11, col, "left", "400", w - 72);
         }
         if (hasZeta(l)) {
             const zf = zetaFix(l);
@@ -1063,7 +1088,7 @@ export function createObservatory(hooks) {
                 }
             }
             text(c, "FIX", 14, botTop + 128, 10, "rgba(180,200,220,0.6)");
-            text(c, msg, 64, botTop + 128, 11, col);
+            text(c, msg, 64, botTop + 128, 11, col, "left", "400", w - 72);
         }
         let info = "Click the world to move the probe. Pick a tool to build. Select an emitter for TRI · Keys 1-8 tools · Space play · ←/→ time · H heat · V spacetime · K cut pulse · U uncut · B bulk 3D/4D · Z/I depth · L link · laws: T time · M medium · D dim · X loss · N noise · G gauss · P path (straight/bent)";
         if (l.sel?.kind === "domain") {
@@ -1125,6 +1150,7 @@ export function createObservatory(hooks) {
             custom = null;
             fg.goal = null;
             fg.start = null;
+            fg.startProbe = null;
             loopFrom = null;
             lab = newLab(spec ?? defaultWorld());
             lastRev = -1;

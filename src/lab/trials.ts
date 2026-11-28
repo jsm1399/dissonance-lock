@@ -27,6 +27,8 @@ export interface Trial {
   hidden?(seed: number): Laws;
   /** scrub time the trial is set at */
   t: number;
+  /** where the probe starts (default: the default probe) */
+  probe?: { x: number; y: number; z?: number; w?: number };
   check(lab: Lab, ctx?: TrialCtx): TrialState;
 }
 

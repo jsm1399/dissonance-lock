@@ -45,9 +45,19 @@ export const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 export function text(
   c: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color: string,
-  align: CanvasTextAlign = "left", weight = "400",
+  align: CanvasTextAlign = "left", weight = "400", maxW?: number,
 ): void {
   c.font = `${weight} ${size}px ${FONT}`;
+  if (maxW !== undefined && maxW > 0 && c.measureText(s).width > maxW) {
+    // narrow screens: shrink toward 8px first, then cut with an ellipsis rather than run off the edge
+    let sz = size;
+    while (sz > 8 && c.measureText(s).width > maxW) { sz -= 0.5; c.font = `${weight} ${sz}px ${FONT}`; }
+    if (c.measureText(s).width > maxW) {
+      let t = s;
+      while (t.length > 1 && c.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+      s = `${t}…`;
+    }
+  }
   c.textAlign = align;
   c.textBaseline = "middle";
   c.fillStyle = color;

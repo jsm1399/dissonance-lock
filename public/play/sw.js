@@ -1,4 +1,4 @@
-const CACHE = "dissonance-lock-v1.19";
+const CACHE = "dissonance-lock-v1.21";
 const ASSETS = [
   "./",
   "./icon-192.png",

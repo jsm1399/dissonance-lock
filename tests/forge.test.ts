@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TRIALS } from "../src/lab/trials.js";
-import { GOAL_KINDS, asTrial, briefOf, checkGoal, decodeTrial, encodeTrial, forge, goalProblems, keepOf, startsSolved } from "../src/lab/forge.js";
+import { GOAL_KINDS, asTrial, briefOf, checkGoal, decodeTrial, encodeTrial, forge, goalProblems, keepOf, placeProbe, probeOf, startsSolved } from "../src/lab/forge.js";
+import type { ProbePos } from "../src/lab/forge.js";
 import type { Goal } from "../src/lab/forge.js";
-import { adjustFeedback, clearDrifts, cycleLaw, newLab, removeFeedback } from "../src/lab/lab.js";
+import { adjustFeedback, clearDrifts, cycleLaw, moveSel, newLab, removeFeedback, setDepth, triangulate } from "../src/lab/lab.js";
 import type { Lab } from "../src/lab/lab.js";
 import { packJson, validate } from "../src/lab/world.js";
 import type { WorldSpec } from "../src/lab/world.js";
@@ -23,7 +24,7 @@ const CASES: Case[] = [
 ];
 
 test("forge: every goal kind is covered and rejects worlds it cannot judge", () => {
-  assert.deepEqual(CASES.map((c) => c.goal.kind).sort(), [...GOAL_KINDS].sort());
+  assert.deepEqual([...CASES.map((c) => c.goal.kind), "flat"].sort(), [...GOAL_KINDS].sort(), "flat has its own tests below (it is solved by moving the probe, not editing the world)");
   const bare: WorldSpec = { v: 1, rootSpeed: 6, domains: [], emitters: [{ id: "E", domain: "root", pos: [20, 50], period: 4, phase: 0, hue: 10 }] };
   for (const k of ["damped", "marginal", "passive"] as const) assert.ok(goalProblems(bare, { kind: k }).length > 0, k);
   assert.ok(goalProblems(bare, { kind: "conserved" }).length > 0);
@@ -120,4 +121,83 @@ test("forge: random link noise never throws", () => {
     for (let k = Math.floor(rnd() * 80); k > 0; k--) s += alpha[Math.floor(rnd() * alpha.length)];
     assert.doesNotThrow(() => decodeTrial(s));
   }
+});
+
+// ---------- flat goal: the sightline, authored by moving the probe ----------
+const sightline = () => trial("sightline");
+/** A probe position (on a coarse grid) where the array reads FLAT for the sightline world. */
+function flatSpot(): ProbePos {
+  const t = sightline();
+  for (let y = 20; y <= 80; y += 10) for (let x = 20; x <= 80; x += 10) {
+    const l = newLab(t.world()); l.t = t.t; placeProbe(l, { x, y });
+    if (triangulate(l, "E")?.verdict === "flat") return { x, y };
+  }
+  throw new Error("no flat probe position found");
+}
+
+test("forge flat: probe position travels in the link; moving the probe solves it, editing the sky does not", () => {
+  const t = sightline(), goal: Goal = { kind: "flat", target: "E" };
+  const startSpec = clone(t.world()), good = flatSpot();
+  assert.deepEqual(goalProblems(startSpec, { kind: "flat" }).length > 0, true, "needs a target");
+  assert.deepEqual(goalProblems(startSpec, goal), []);
+  assert.equal(startsSolved(startSpec, goal, t.t), false, "default probe is warped");
+  assert.equal(startsSolved(startSpec, goal, t.t, good), true, "the witness position reads flat");
+  // seal: start at the default probe, witness probe elsewhere
+  assert.equal(forge("", goal, t.t, startSpec, startSpec, { x: 50, y: 50 }, { x: 50, y: 50 }).ok, false, "unsolved: same probe");
+  assert.equal(forge("", goal, t.t, startSpec, startSpec, good, good).ok, false, "a start that already passes is refused");
+  const r = forge("", goal, t.t, startSpec, startSpec, { x: 50, y: 50 }, good);
+  assert.ok(r.ok, r.ok ? "" : r.why);
+  if (!r.ok) return;
+  assert.equal(r.trial.probe, undefined, "default start probe is not stored");
+  // an author who starts the probe somewhere else carries it in the link
+  const start2: ProbePos = { x: 62.5, y: 41.25 };
+  const r2 = forge("far", goal, t.t, startSpec, startSpec, start2, good);
+  assert.ok(r2.ok);
+  if (!r2.ok) return;
+  assert.deepEqual(r2.trial.probe, start2);
+  const back = decodeTrial(encodeTrial(r2.trial));
+  assert.deepEqual(back, r2.trial);
+  const tr = asTrial(back as NonNullable<typeof back>);
+  assert.deepEqual(tr.probe, start2);
+  assert.match(tr.brief, /TRI reads FLAT/);
+  const a = newLab(tr.world()); a.t = tr.t; placeProbe(a, tr.probe as ProbePos);
+  assert.equal(tr.check(a).ok, false, "fails on arrival");
+  placeProbe(a, good);
+  assert.equal(tr.check(a).ok, true, "moving the probe to the flat spot passes");
+  // rewriting the sky is refused even when it makes the array read flat
+  const b = newLab(tr.world()); b.t = tr.t; placeProbe(b, good);
+  moveSel(b, { kind: "domain", id: "w" }, [10, 90]);
+  const verdict = tr.check(b);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.status, /sky was changed/);
+  assert.deepEqual(probeOf(a), good);
+});
+
+test("forge flat: links are strict about the probe", () => {
+  const t = sightline(), goal: Goal = { kind: "flat", target: "E" };
+  const r = forge("", goal, t.t, clone(t.world()), clone(t.world()), { x: 50, y: 50 }, flatSpot());
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  const enc = (p: unknown) => packJson({ v: 1, n: "x", g: "flat", e: "E", t: r.trial.t, w: r.trial.world, p });
+  assert.ok(decodeTrial(enc({ x: 40, y: 30 })), "a good probe parses");
+  for (const bad of [{ x: -1, y: 5 }, { x: 101, y: 5 }, { x: "4", y: 5 }, { x: 1 }, { x: 1, y: 2, w: 3 }, { x: 1, y: 2, z: 99 }, { x: 1, y: 2, q: 1 }, [1, 2], 7, null]) {
+    assert.equal(decodeTrial(enc(bad)), null, JSON.stringify(bad));
+  }
+  assert.equal(decodeTrial(enc(flatSpot())), null, "a probe that already reads flat is refused: the trial would start solved");
+  // a probe on a non-flat goal is refused
+  const loop = lab("runaway");
+  assert.equal(decodeTrial(packJson({ v: 1, n: "x", g: "damped", t: 0, w: clone(loop.spec), p: { x: 10, y: 10 } })), null);
+  // hidden coordinates are accepted only in worlds that have the axis
+  assert.ok(decodeTrial(enc({ x: 40, y: 30, z: 4 })), "the sightline world is bulk, so z is allowed");
+});
+
+test("forge flat: the probe's hidden height is part of the link in 4D", () => {
+  const w: WorldSpec = { v: 1, rootSpeed: 6, bulk: true, bulk2: true, domains: [], emitters: [{ id: "E", domain: "root", pos: [30, 30], period: 4, phase: 0, hue: 10, z: 12, w: -8 }] };
+  const goal: Goal = { kind: "flat", target: "E" };
+  const l = newLab(clone(w)); l.t = 80;
+  const P = { kind: "probe" as const, id: "probe" };
+  setDepth(l, P, 4, "z"); setDepth(l, P, -8, "w");
+  assert.deepEqual(probeOf(l), { x: 50, y: 50, z: 4, w: -8 });
+  // an empty 4D sky always reads flat, so this start is refused as already solved
+  assert.equal(forge("", goal, 80, w, w, probeOf(l), probeOf(l)).ok, false);
 });

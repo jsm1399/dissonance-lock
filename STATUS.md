@@ -1,6 +1,8 @@
-# STATUS — Dissonance-Lock v1.19
+# STATUS — Dissonance-Lock v1.21
 
 ## Live capabilities
+- **NEW v1.21 Phone-ready Observatory:** below 640 px wide the toolbar shows one group at a time (BUILD / RUN / LAWS / FORGE tabs on the first row; FORGE is hidden inside trials), cutting five rows to three and giving the map back about 60 px; desktop layout is unchanged. Instrument lines in the bottom panel (PROBE, AUDIT, LOOPS, FIX, LAWS, ECHO, TRI) now shrink toward 8 px and then ellipsize instead of running off the screen. Verified by screenshots on 390x780 and 1000x780 and a real tap on the tab and a button; there are no automated tests for the canvas layout. Cache name v1.21.
+- **NEW v1.20 Forge goal FLAT (array verdicts + probe position in the link):** a sixth Forge goal, "Clear the sightline": the verdict is the TRI array reading FLAT for a chosen emitter. The author breaks it (sky that bends the echoes), SEALs the start (the probe's position is recorded), moves the probe to a flat spot and SEALs again. The link (`#t=`) now carries the start probe (`p`: x, y, and z/w in bulk worlds; omitted when it is the default probe) and is parsed strictly (ranges, hidden axes only where the world has them, unknown keys refused, refused on non-flat goals, refused if the start already reads flat). The keep rule is the whole start world: for a flat trial only the probe may move (`Keep.sky`); rewriting the sky is refused even if it makes the array read flat. The witness probe position is still not stored. Trials gained an optional `probe`. Other goals still judge with the default probe. Cache name v1.20.
 - **NEW v1.19 4D Drift:** from depth 9 the seeded generator builds a 4D world (`bulk2`): the strata tree has four dimensions and root beacons 2 (z and w) and 4 (w only) hide along the second axis (|w| 8..28, either side of the slice); depths 5-8 stay 3D and depths below 5 are unchanged (same seeds give the same levels). A 40-world sweep over depths 9, 10, 12, 15 found every level calibrated (coherent zone and overload zone both exist) and a contour bot wins depth 9. Drift briefings announce two hidden axes. Cache name v1.19.
 - **NEW v1.18 Second Axis (campaign L7) + Trial 8 "Hidden Heading":** the first 4D level in the game. `LevelDef.bulk2` (implies `bulk`) builds a 4-dimensional strata tree; beacons carry `z` and/or `w` (`beaconPos`/`planeSite` lift to 4D, `isHidden` marks any off-plane beacon: dashed halo, tag `↑z`, `↑w` or `↑zw`, no wavefront ring because you only hear them). The calibrated spread cap (11.3) is tested for a coherent zone and an overload zone and a contour bot wins it. Tests prove D (w 24) and F (z 14, w 14) are heard at exactly their 4D distance, and that z and w of equal norm give identical lags (the plane cannot tell the axes apart). Trial 8: E hides at z 12, w -8 in an empty 4D sky; TRI's lifted arrays read the signed heading; fly the probe there (Z / I, steps of 4) until TRI reads E in your slice (FLAT, <= 1.5 hidden units). Moving E or leaving 4D is refused. Title menu now drops the rules text on screens shorter than 720 px so 12 rows fit on a phone. Cache name v1.18.
 - Game: tutorial, 6 campaign levels, Daily/Free Drift (seeded, calibrated), gamepad, PWA/offline.
@@ -36,7 +38,7 @@
 
 ## Known limits
 - TRI assumes straight chords and the nominal root speed; it cannot tell above from below the plane; the array is a fixed plus-shape of radius 16 around the probe (clamped inside the world).
-- Forge: the probe position is not part of a link (every player starts at the default probe), so goals are judged with the default probe; a sealed link carries the start world only, not the witness solution; goals cover loop, energy and zeta verdicts only.
+- Forge: a sealed link carries the start world (and, for flat goals, the start probe) but not the witness solution; the probe position matters only for flat goals (the other goals are judged with the default probe); goals cover loop, energy, zeta and array (flat) verdicts.
 - Bulk worlds use straight chords (bent paths need flat space); off-plane wavefront sections are redrawn every 0.5 s and assume arrival grows with in-plane distance.
 - Zeta beacons: 400 zeros tabulated (gamma up to ~811), so a slow scale runs out of pulses before t=240; calibration assumes constant flight time (a moving probe or drifting path shows as deviation, by design).
 - Feedback echoes use straight chords (like relays), and feedback echoes cannot themselves be relayed or cut: cut the pulse that caused them.
@@ -46,7 +48,7 @@
 - Spacetime segments are straight (launch → arrival); bent paths show correct arrival but not the in-flight route.
 
 ## Next objectives
-1. 4D follow-ups (L7, Trial 8 and 4D Drift are done): probe arrays that move through the hidden axes on their own; trials/forge goals for the array; movable array geometry; array readings through bent (Fermat) paths and relays; forge goals for the array (TRI reads flat).
-2. Reality-edit scripting: named interventions in the link; trial editor v2 (author-set names, spacetime/zeta goals, probe position in the link).
+1. 4D follow-ups (L7, Trial 8 and 4D Drift are done): probe arrays that move through the hidden axes on their own; trials/forge goals for the array; movable array geometry; array readings through bent (Fermat) paths and relays; 
+2. Reality-edit scripting: named interventions in the link; trial editor v2 (author-set names, spacetime goals).
 3. Trial gallery: a built-in shelf of community-style trials the Forge produced.
 4. Causal-chain levels in the campaign; movable slice plane; PATH·BENT-aware instruments.

@@ -12,8 +12,22 @@ export function layout(w, h) {
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 export const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
 export const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-export function text(c, s, x, y, size, color, align = "left", weight = "400") {
+export function text(c, s, x, y, size, color, align = "left", weight = "400", maxW) {
     c.font = `${weight} ${size}px ${FONT}`;
+    if (maxW !== undefined && maxW > 0 && c.measureText(s).width > maxW) {
+        // narrow screens: shrink toward 8px first, then cut with an ellipsis rather than run off the edge
+        let sz = size;
+        while (sz > 8 && c.measureText(s).width > maxW) {
+            sz -= 0.5;
+            c.font = `${weight} ${sz}px ${FONT}`;
+        }
+        if (c.measureText(s).width > maxW) {
+            let t = s;
+            while (t.length > 1 && c.measureText(`${t}…`).width > maxW)
+                t = t.slice(0, -1);
+            s = `${t}…`;
+        }
+    }
     c.textAlign = align;
     c.textBaseline = "middle";
     c.fillStyle = color;
