@@ -188,7 +188,38 @@ export const TRIALS: Trial[] = [
       return { ok: tr.verdict === "flat" && d <= HEADING_TOL, status: `${tr.verdict.toUpperCase()} · reads ${d.toFixed(1)} hidden units away · need ≤ ${HEADING_TOL}` };
     },
   },
+  {
+    id: "common", name: "Common Slice",
+    brief: "E and F share a hidden address; G hides at the same distance but somewhere else. Open VIEW·SLICE (V) on plane ZW (S) to see them, then fly the probe (drag, or Z / I) to the slice E and F share: TRI must read both in your plane. Leave the sky alone.",
+    t: 80,
+    world: commonWorld,
+    check(lab) {
+      const base = commonWorld().emitters;
+      const same = lab.spec.bulk2 && base.every((b) => {
+        const e = lab.spec.emitters.find((x) => x.id === b.id);
+        return !!e && e.z === b.z && e.w === b.w && e.pos[0] === b.pos[0] && e.pos[1] === b.pos[1];
+      }) && lab.spec.emitters.length === base.length;
+      if (!same) return { ok: false, status: "the sky must stay as it is, in 4D: find the shared slice, do not edit it" };
+      const rd = ["E", "F"].map((id) => triangulate(lab, id));
+      if (rd.some((r) => !r)) return { ok: false, status: "array listening…" };
+      const ds = rd.map((r) => (r as NonNullable<typeof r>).fix.depth);
+      const ok = rd.every((r, i) => (r as NonNullable<typeof r>).verdict === "flat" && ds[i] <= HEADING_TOL);
+      return { ok, status: `E ${ds[0].toFixed(1)} · F ${ds[1].toFixed(1)} hidden units away · need both ≤ ${HEADING_TOL}` };
+    },
+  },
 ];
+
+/** 4D, empty sky: E and F sit at the same hidden address (z 12, w -8); decoy G has the same hidden norm (z -8, w 12). */
+function commonWorld(): WorldSpec {
+  return {
+    v: 1, rootSpeed: 6, bulk: true, bulk2: true, domains: [],
+    emitters: [
+      em({ id: "E", pos: [25, 30], period: 4, z: 12, w: -8, hue: 190 }),
+      em({ id: "F", pos: [75, 35], period: 5, z: 12, w: -8, hue: 40 }),
+      em({ id: "G", pos: [50, 82], period: 4.5, z: -8, w: 12, hue: 300 }),
+    ],
+  };
+}
 
 /** The probe must read this close (hidden units) to E's slice. Probe steps are 4, so the target lies on the step grid. */
 export const HEADING_TOL = 1.5;

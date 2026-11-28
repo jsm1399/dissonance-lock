@@ -111,3 +111,24 @@ test("trial Hidden Heading: only the right hidden coordinates pass; moving E or 
   cycleBulk(flat); cycleBulk(flat); // 4D -> off
   assert.equal(t.check(flat).ok, false, "leaving 4D is refused");
 });
+
+test("trial Common Slice: only the hidden address E and F share passes; G's address and the origin do not", () => {
+  const t = trial("common");
+  const probe = { kind: "probe" as const, id: "probe" };
+  const go = (l: Lab, z: number, w: number) => {
+    times(Math.abs(z) / 4, () => setDepth(l, probe, z > 0 ? 4 : -4, "z"));
+    times(Math.abs(w) / 4, () => setDepth(l, probe, w > 0 ? 4 : -4, "w"));
+  };
+  assert.equal(t.check(fresh("common")).ok, false, "starts in the wrong slice");
+  for (const [z, w] of [[-8, 12], [0, 0], [12, 0], [8, -8]] as [number, number][]) {
+    const l = fresh("common"); go(l, z, w);
+    assert.equal(t.check(l).ok, false, `(${z},${w}) is not the shared slice`);
+  }
+  const l = fresh("common"); go(l, 12, -8);
+  assert.equal(t.check(l).ok, true);
+  const moved = fresh("common"); go(moved, 12, -8);
+  setDepth(moved, { kind: "emitter", id: "F" }, -4, "z");
+  assert.equal(t.check(moved).ok, false, "editing the sky is refused");
+  const flat = fresh("common"); cycleBulk(flat);
+  assert.equal(t.check(flat).ok, false, "leaving 4D is refused");
+});
