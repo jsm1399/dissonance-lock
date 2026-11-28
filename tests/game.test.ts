@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LEVELS } from "../src/game/levels.js";
+import { LEVELS, beaconPos } from "../src/game/levels.js";
 import type { LevelDef } from "../src/game/levels.js";
 import { StrataTree } from "../src/core/strata/index.js";
 import { newGame, step, probeSpread, TICK, WORLD, MAX_CHARGES } from "../src/game/state.js";
@@ -147,7 +147,7 @@ test("design: every level has a coherent zone and an overload zone (contour exis
 test("design: a contour-following bot can win every level", () => {
   const dirs: [number, number][] = [[0, 0]];
   for (let i = 0; i < 8; i++) dirs.push([Math.cos((i * Math.PI) / 4), Math.sin((i * Math.PI) / 4)]);
-  for (const L of [LEVELS[0], LEVELS[2], LEVELS[4], LEVELS[5], generateLevel(20261122, 3), generateLevel(20261122, 6)]) {
+  for (const L of [LEVELS[0], LEVELS[2], LEVELS[4], LEVELS[5], LEVELS[6], generateLevel(20261122, 3), generateLevel(20261122, 6)]) {
     const g = newGame(L);
     g.pos = [50, 50];
     const pStar = L.decay / L.gain;
@@ -189,4 +189,35 @@ test("bulk drift levels (depth >= 5) are deterministic, valid and still winnable
   assert.deepEqual(a.beacons, b.beacons);
   assert.ok(a.beacons.some((x) => x.z && x.z >= 8 && x.z <= 28));
   assert.ok(!generateLevel(99, 4).bulk);
+});
+
+test("4D level: beacons hidden along z and along w are heard at their 4D distance", () => {
+  const L = LEVELS[6];
+  assert.ok(L.bulk && L.bulk2);
+  const g = newGame(L);
+  assert.equal(g.tree.dim, 4);
+  assert.equal(g.pos.length, 2);
+  const heard = new Map<number, number>();
+  for (let i = 0; i < 60 * 20; i++) {
+    step(g, idle);
+    for (const e of g.events) if (e.kind === "heard" && !heard.has(e.pulse.beacon)) heard.set(e.pulse.beacon, e.pulse.arrival - e.pulse.emitRoot);
+  }
+  // D hides 24 along w, F hides 14 along z AND w: both chords miss every domain, so lag is exactly 4D distance / 6
+  // (B hides 20 along z but its chord crosses the well, so it is only checked for being late)
+  const bp = Math.hypot(L.beacons[1].pos[0] - 50, L.beacons[1].pos[1] - 50);
+  assert.ok((heard.get(1) as number) > bp / 6 + 0.3);
+  for (const [i, z, w] of [[3, 0, 24], [5, 14, 14]] as [number, number, number][]) {
+    const b = L.beacons[i];
+    const planar = Math.hypot(b.pos[0] - 50, b.pos[1] - 50);
+    const lag = heard.get(i) as number;
+    assert.ok(lag > planar / 6 + 0.3, `${b.name}: ${lag.toFixed(2)} must exceed planar ${(planar / 6).toFixed(2)}`);
+    const full = Math.hypot(planar, z, w) / 6;
+    assert.ok(Math.abs(lag - full) < 0.2, `${b.name}: lag ${lag.toFixed(2)} vs 4D ${full.toFixed(2)}`);
+  }
+  // equal hidden norm, different axis: same lag (the plane cannot tell z from w)
+  const q = { ...L, beacons: [{ ...L.beacons[0], pos: [30, 50] as [number, number], z: 15 }, { ...L.beacons[0], pos: [30, 50] as [number, number], w: 15 }] };
+  assert.equal(beaconPos(q, q.beacons[0]).length, 4);
+  const a = newGame({ ...q, beacons: [q.beacons[0]] }), b = newGame({ ...q, beacons: [q.beacons[1]] });
+  const lagOf = (gg: ReturnType<typeof newGame>) => { for (let i = 0; i < 60 * 12; i++) { step(gg, idle); const ev = gg.events.find((e) => e.kind === "heard"); if (ev && ev.kind === "heard") return ev.pulse.arrival - ev.pulse.emitRoot; } return NaN; };
+  near(lagOf(a), lagOf(b), 1e-9);
 });

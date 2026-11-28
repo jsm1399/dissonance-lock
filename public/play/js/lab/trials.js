@@ -148,7 +148,34 @@ export const TRIALS = [
             return { ok: tr.verdict === "flat", status: `${tr.verdict.toUpperCase()} · misfit ${tr.fix.residual.toFixed(4)}s · reads depth ${tr.fix.depth.toFixed(1)} · need flat` };
         },
     },
+    {
+        id: "heading", name: "Hidden Heading",
+        brief: "E hides off your plane in a 4D world. TRI's lifted arrays read its signed hidden coordinates (z, w). Fly the probe there (Z / I, Shift reverses, steps of 4) until TRI reads E in your slice. Leave E alone.",
+        t: 80,
+        world: headingWorld,
+        check(lab) {
+            const base = headingWorld().emitters[0];
+            const e = lab.spec.emitters.find((x) => x.id === "E");
+            if (!lab.spec.bulk2 || !e || e.z !== base.z || e.w !== base.w || e.pos[0] !== base.pos[0] || e.pos[1] !== base.pos[1]) {
+                return { ok: false, status: "E must stay where it is, in 4D: find it, do not move it" };
+            }
+            const tr = triangulate(lab, "E");
+            if (!tr)
+                return { ok: false, status: "array listening…" };
+            const d = tr.fix.depth;
+            return { ok: tr.verdict === "flat" && d <= HEADING_TOL, status: `${tr.verdict.toUpperCase()} · reads ${d.toFixed(1)} hidden units away · need ≤ ${HEADING_TOL}` };
+        },
+    },
 ];
+/** The probe must read this close (hidden units) to E's slice. Probe steps are 4, so the target lies on the step grid. */
+export const HEADING_TOL = 1.5;
+/** 4D, empty sky: E hides at z=12, w=-8 (norm 14.4). A plane array reads only the norm; the lifted arrays give the signed heading. */
+function headingWorld() {
+    return {
+        v: 1, rootSpeed: 6, bulk: true, bulk2: true, domains: [],
+        emitters: [em({ id: "E", pos: [30, 30], period: 4, z: 12, w: -8 })],
+    };
+}
 /** Bulk world: E hides 9 above the plane; a shear well sits between it and the default probe, plus a fast lane. */
 function sightlineWorld() {
     return {

@@ -1,8 +1,10 @@
 import { StrataTree } from "../core/strata/index.js";
-/** Beacon site in its domain's coordinates (3D in bulk levels). */
-export const beaconPos = (L, b) => (L.bulk ? [b.pos[0], b.pos[1], b.z ?? 0] : b.pos);
+/** Beacon site in its domain's coordinates (3D in bulk levels, 4D in bulk2 levels). */
+export const beaconPos = (L, b) => (L.bulk2 ? [b.pos[0], b.pos[1], b.z ?? 0, b.w ?? 0] : L.bulk ? [b.pos[0], b.pos[1], b.z ?? 0] : b.pos);
 /** The player's plane, lifted into the level's dimension. */
-export const planeSite = (L, p) => (L.bulk ? [p[0], p[1], 0] : p);
+export const planeSite = (L, p) => (L.bulk2 ? [p[0], p[1], 0, 0] : L.bulk ? [p[0], p[1], 0] : p);
+/** True when a beacon sits off the player's plane along any hidden axis. */
+export const isHidden = (b) => !!(b.z || b.w);
 export const ROOT_SPEED = 6;
 function level1() {
     const t = new StrataTree(2, ROOT_SPEED);
@@ -70,6 +72,17 @@ function level6() {
         shear: (p) => 0.2 + 0.8 * Math.min(1, Math.hypot(...p) / 15),
     });
     t.setRate("fast", 30, 1.5);
+    return t;
+}
+function level7() {
+    const t = new StrataTree(4, ROOT_SPEED);
+    t.add({ id: "fast", parent: "root", origin: [28, 62, 0, 0], scale: 1, extent: 17, echoSpeed: ROOT_SPEED, rate: 3 });
+    t.add({
+        id: "well", parent: "root", origin: [72, 34, 0, 0], scale: 1, extent: 15, echoSpeed: ROOT_SPEED,
+        shear: (p) => 0.2 + 0.8 * Math.min(1, Math.hypot(...p) / 15),
+    });
+    t.setRate("fast", 28, 1.5);
+    t.setRate("fast", 58, 4);
     return t;
 }
 /** Interactive tutorial world: open medium, three beacons, forgiving lock. */
@@ -168,5 +181,20 @@ export const LEVELS = [
         ],
         start: [50, 50],
         gain: 22, decay: 6, spreadCap: 11.6, lockRate: 2.8, bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
+    },
+    {
+        id: 7, tag: "L7", name: "Second Axis",
+        blurb: "Two hidden axes. Late does not say which way.",
+        build: level7, bulk: true, bulk2: true,
+        beacons: [
+            { name: "A", domain: "root", pos: [10, 12], period: 3.3, phase: 0, hue: 190 },
+            { name: "B", domain: "root", pos: [90, 12], period: 3.9, phase: 0.7, hue: 40, z: 20 },
+            { name: "C", domain: "fast", pos: [-6, 6], period: 9, phase: 1, hue: 300 },
+            { name: "D", domain: "root", pos: [50, 92], period: 4.6, phase: 1.6, hue: 130, w: 24 },
+            { name: "E", domain: "well", pos: [4, -4], period: 4.2, phase: 0.4, hue: 0, z: 5, w: -5 },
+            { name: "F", domain: "root", pos: [90, 88], period: 5.1, phase: 2.2, hue: 260, z: 14, w: 14 },
+        ],
+        start: [50, 50],
+        gain: 22, decay: 6, spreadCap: 11.3, lockRate: 2.8, bandLo: 20, bandHi: 75, window: 12, margin: 0.25,
     },
 ];

@@ -10,6 +10,7 @@ export const BRIEFS: Record<number, Brief> = {
   4: { title: "SECTOR 4 · TWIN WELLS", lines: ["Two time-sinks and a fast lane in between. Cause and effect tangle here.", "Re-anchor before the lattice does it for you."] },
   5: { title: "SECTOR 5 · EVENT HORIZON", lines: ["A well deep enough that nothing arrives on time, and a fast pocket inside it.", "Few operators have held a lock here."] },
   6: { title: "SECTOR 6 · HIDDEN AXIS", lines: ["The lattice has a depth the map cannot show. Some beacons hover off your plane.", "Their echoes come late for reasons the nearest beacon will not explain."] },
+  7: { title: "SECTOR 7 · SECOND AXIS", lines: ["One hidden axis was a rumour. There are two. Beacons marked z or w sit off your plane in different directions.", "Late is late: the echo cannot tell you which way the beacon hides."] },
 };
 
 const NAMES = ["Cinder", "Halcyon", "Mirrorfall", "Static Orchard", "Ninth Wake", "Glasswork", "Low Meridian", "Vesper Gate",

@@ -1,6 +1,6 @@
 import { WORLD, MAX_CHARGES, CHARGE_REGEN } from "./state.js";
 import { wavefront } from "../core/strata/index.js";
-import { beaconPos } from "./levels.js";
+import { beaconPos, isHidden } from "./levels.js";
 export function layout(w, h) {
     const hudH = w < 640 ? 96 : 64;
     const stripH = 58;
@@ -42,7 +42,7 @@ function updateWavefronts(g) {
         const c = wfCache.get(p.id);
         if (!c || g.time - c.t >= 0.1) {
             const b = g.level.beacons[p.beacon];
-            if (b.z)
+            if (isHidden(b))
                 continue; // hidden-axis beacons give no ring: you only hear them
             wfCache.set(p.id, {
                 t: g.time,
@@ -227,14 +227,14 @@ function drawWorld(c, g, ui, v, now) {
         c.fillStyle = hsl(b.hue, 85, 62);
         c.fill();
         text(c, b.name, cx, cy - 3.4 * v.s, 10, hsl(b.hue, 80, 75), "center", "700");
-        if (b.z) { // hovers off the plane: dashed halo + arrow, no wavefront
+        if (isHidden(b)) { // hovers off the plane: dashed halo + axis tag, no wavefront
             c.setLineDash([2, 3]);
             c.strokeStyle = hsl(b.hue, 70, 70, 0.8);
             c.beginPath();
             c.arc(cx, cy, 3 * v.s, 0, Math.PI * 2);
             c.stroke();
             c.setLineDash([]);
-            text(c, "↑", cx + 3.4 * v.s, cy - 2.4 * v.s, 11, hsl(b.hue, 80, 80), "center", "700");
+            text(c, `↑${b.z ? "z" : ""}${b.w ? "w" : ""}`, cx + 4 * v.s, cy - 2.4 * v.s, 11, hsl(b.hue, 80, 80), "center", "700");
         }
     });
     // trail + player
@@ -448,11 +448,16 @@ function drawTitle(c, ui, v, now) {
         "RE-ANCHOR (space) resets dissonance. Move: WASD / arrows / drag.",
     ];
     const fs = Math.max(8, Math.min(12, (v.w - 16) / 37.8));
-    for (const l of lines) {
-        text(c, l, cx, y, fs, "rgba(200,215,235,0.85)", "center");
-        y += fs + 7;
+    // short screens: the rules are on the tutorial; give the menu rows the room
+    if (v.h >= 720) {
+        for (const l of lines) {
+            text(c, l, cx, y, fs, "rgba(200,215,235,0.85)", "center");
+            y += fs + 7;
+        }
+        y += 14;
     }
-    y += 14;
+    else
+        y -= 8;
     ui.hits.rows = [];
     const n = ui.menu.length;
     const room = v.h - y - 34;

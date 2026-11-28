@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TRIALS } from "../src/lab/trials.js";
-import { addFeedback, adjustFeedback, clearDrifts, newLab, removeFeedback, setDepth } from "../src/lab/lab.js";
+import { addFeedback, adjustFeedback, clearDrifts, cycleBulk, newLab, removeFeedback, setDepth } from "../src/lab/lab.js";
 import { validate, parseWorld } from "../src/lab/world.js";
 import { emptySave, parseSave } from "../src/game/save.js";
 import type { Lab } from "../src/lab/lab.js";
@@ -87,4 +87,27 @@ test("save: cleared trials persist, dedupe and survive garbage", () => {
   assert.deepEqual(s.trials, ["runaway", "ring"]);
   assert.deepEqual(parseSave(JSON.stringify({ trials: "x" }), 6).trials, []);
   assert.deepEqual(parseSave("not json", 6).trials, []);
+});
+
+test("trial Hidden Heading: only the right hidden coordinates pass; moving E or leaving 4D does not", () => {
+  const t = trial("heading");
+  const probe = { kind: "probe" as const, id: "probe" };
+  const go = (l: Lab, z: number, w: number) => {
+    times(Math.abs(z) / 4, () => setDepth(l, probe, z > 0 ? 4 : -4, "z"));
+    times(Math.abs(w) / 4, () => setDepth(l, probe, w > 0 ? 4 : -4, "w"));
+  };
+  assert.match(t.check(fresh("heading")).status, /14\.4/, "starts far: reads the norm");
+  for (const [z, w] of [[8, -8], [12, -12], [-12, 8], [0, 0], [12, 0]] as [number, number][]) {
+    const l = fresh("heading"); go(l, z, w);
+    assert.equal(t.check(l).ok, false, `(${z},${w}) is not E's slice`);
+  }
+  const l = fresh("heading"); go(l, 12, -8);
+  assert.equal(t.check(l).ok, true);
+  const moved = fresh("heading"); go(moved, 12, -8);
+  setDepth(moved, { kind: "emitter", id: "E" }, -12, "z"); // drag E onto the probe instead
+  setDepth(moved, { kind: "emitter", id: "E" }, 8, "w");
+  assert.equal(t.check(moved).ok, false, "moving E is refused");
+  const flat = fresh("heading");
+  cycleBulk(flat); cycleBulk(flat); // 4D -> off
+  assert.equal(t.check(flat).ok, false, "leaving 4D is refused");
 });
